@@ -11,9 +11,26 @@
     "build": "npm run build -w @modelclash/core && npm run build -w modelclash",
     "dev": "npm run dev --workspace @modelclash/cli",
     "start": "npm run start --workspace @modelclash/cli",
+    "cli": "npm run start --workspace @modelclash/cli --",
+    "cli:dev": "npm run dev --workspace @modelclash/cli --",
+    "cli:build": "npm run build --workspace @modelclash/cli",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc -b",
     "clean": "rm -rf packages/*/dist"
+  },
+  "howToRun": {
+    "install": "npm install",
+    "build": "npm run build",
+    "runCli": "npm run cli -- <command> [options]   # runs built CLI (requires `npm run build` first)",
+    "runCliDev": "npm run cli:dev -- <command> [options]   # runs CLI from TypeScript source, no build step",
+    "examples": [
+      "npm run cli -- --help",
+      "npm run cli:dev -- config",
+      "npm run cli -- compare \"Write a haiku about the sea\""
+    ],
+    "test": "npm test",
+    "testWatch": "npm run test:watch"
   },
   "devDependencies": {
     "@types/node": "^22.10.1",
