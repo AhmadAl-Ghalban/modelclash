@@ -1,6 +1,6 @@
 # modelclash ⚔️
 
-A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**, **Google**, **Groq**, **DeepSeek**, and local **Ollama** models side-by-side from a single prompt.
+A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**, **Google**, **Groq**, **DeepSeek**, and local **Ollama** models — side-by-side from a single prompt, or in an interactive multi-turn chat.
 
 > **Keep this file in sync.** Whenever you add, remove, or change a feature, flag, script, env var, or run step, update the matching section of this README in the **same PR**. CI (see [Continuous Integration](#continuous-integration)) does not check docs — reviewers do.
 
@@ -9,20 +9,20 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 - Parallel calls to OpenAI, Anthropic, Google, Groq, DeepSeek, and Ollama (local)
 - Token usage reporting and per-model cost estimation
 - Configurable per-provider model selection, temperature, and timeout
-- Optional streaming (sequential) output
+- Streaming output (sequential, per-provider)
 - JSON output mode + file save
 - Retry with exponential backoff and per-request timeouts
-- Colored terminal UI with side-by-side summary table
 - User config at `~/.modelclash/config.json` (managed via `modelclash config`)
-- Pick which providers to run (`--providers openai,groq` or interactive picker)
-- Multi-turn `modelclash chat` REPL with conversation history
+- Provider selection: `--providers openai,groq` flag or interactive checkbox picker
+- Multi-turn `modelclash chat` REPL with conversation history, slash commands, system prompts, session save/load, mid-chat model swap, and a per-turn comparison table (fastest / cheapest / longest / highest tok/s badges)
+- Bundled Docker setup for running Ollama locally
 - TypeScript strict mode, Vitest unit tests, npm workspaces monorepo
 
 ## Requirements
 
-- **Node.js ≥ 18** (CI tests on 18, 20, 22)
-- **npm** (workspaces support — bundled with Node 18+)
-- API keys for at least one of: OpenAI, Anthropic, Google, Groq
+- **Node.js ≥ 20** (CI tests on 20, 22; `.nvmrc` pins `20` for local dev — run `nvm use`)
+- **npm** (workspaces support — bundled with Node 20+)
+- An API key for at least one of: OpenAI, Anthropic, Google, Groq, DeepSeek — **or** a local Ollama install (no key needed)
 
 ## Quick start (for testers)
 
@@ -32,20 +32,23 @@ git clone <repo-url> modelclash
 cd modelclash
 npm install
 
-# 2. Add API keys
+# 2. Add at least one API key (Groq, Google Gemini, and DeepSeek have free tiers — see below)
 cp .env.example .env
 # then edit .env and fill in any keys you have
 
 # 3. Build
 npm run build
 
-# 4. Run the CLI
+# 4. Try it
 npm run cli -- "Explain quantum entanglement in one sentence."
+npm run cli -- chat
 ```
 
 Providers without configured keys are simply skipped, so a single key is enough to try it out.
 
 ## Configuration
+
+modelclash reads settings from three sources, in this priority order: **CLI flags → environment variables → `~/.modelclash/config.json`**. Whichever you set wins for that field; the others fill in the gaps.
 
 ### Environment variables (`.env`)
 
@@ -56,20 +59,51 @@ GOOGLE_API_KEY=AIza...
 GROQ_API_KEY=gsk_...
 DEEPSEEK_API_KEY=sk-...
 OLLAMA_BASE_URL=http://localhost:11434/v1
+
+# Optional model overrides
+DEFAULT_OPENAI_MODEL=gpt-4o
+DEFAULT_ANTHROPIC_MODEL=claude-sonnet-4
+DEFAULT_GOOGLE_MODEL=gemini-2.5-pro
+DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
+DEFAULT_DEEPSEEK_MODEL=deepseek-chat
+DEFAULT_OLLAMA_MODEL=llama3.2
+
+# Optional request timeout
+REQUEST_TIMEOUT_MS=60000
 ```
 
-**Free API keys** to try modelclash without spending money:
+`.env` is searched upward from the current working directory, so it works whether you run from the repo root (`npm run cli`) or from inside `packages/cli`.
 
-| Provider     | Free tier                                                                              | Sign-up                               |
-| ------------ | -------------------------------------------------------------------------------------- | ------------------------------------- |
-| **Groq**     | Generous free rate limits, very fast Llama 3.3 70B                                     | https://console.groq.com/keys         |
-| **Google**   | Free Gemini tier (15 RPM)                                                              | https://aistudio.google.com/apikey    |
-| **DeepSeek** | Free starter credits, strong reasoning (`deepseek-chat`, `deepseek-reasoner`)          | https://platform.deepseek.com         |
-| **Ollama**   | 100% local — no key, no network. Install Ollama, `ollama pull llama3.2`, set base URL  | https://ollama.com                    |
+### Free API keys
 
-#### Running Ollama in Docker
+You can run modelclash without spending money using any of these:
 
-If you don't want to install Ollama on your host, use the bundled `docker-compose.yml`:
+| Provider     | Free tier                                                                          | Sign-up                                  |
+| ------------ | ---------------------------------------------------------------------------------- | ---------------------------------------- |
+| **Groq**     | Generous free rate limits, very fast Llama 3.3 70B                                 | https://console.groq.com/keys            |
+| **Google**   | Free Gemini tier (15 RPM)                                                          | https://aistudio.google.com/apikey       |
+| **DeepSeek** | Free starter credits, strong reasoning (`deepseek-chat`, `deepseek-reasoner`)      | https://platform.deepseek.com            |
+| **Ollama**   | 100 % local — no key, no network. Install Ollama, `ollama pull llama3.2`           | https://ollama.com                       |
+
+### Persistent config (`~/.modelclash/config.json`)
+
+Use the `config` subcommand to manage it:
+
+```bash
+modelclash config init                 # interactive: prompts for keys + default models
+modelclash config path                 # print resolved config path
+modelclash config list                 # print config (keys redacted by default)
+modelclash config list --show-secrets  # print with full keys
+modelclash config get <key>            # e.g. defaultModels.openai
+modelclash config set <key> <value>    # e.g. apiKeys.groq gsk_...
+modelclash config unset <key>
+```
+
+Settable keys: `apiKeys.<provider>`, `defaultModels.<provider>`, `defaults.temperature`, `defaults.timeoutMs`, `defaults.stream`, `aliases.<name>.<provider>`.
+
+### Running Ollama in Docker
+
+If you don't want to install Ollama natively, use the bundled `docker-compose.yml`:
 
 ```bash
 # Start Ollama + auto-pull the default model (llama3.2)
@@ -95,7 +129,7 @@ export OLLAMA_BASE_URL=http://localhost:11434/v1
 npm run cli -- chat -p ollama
 ```
 
-Alternatively, `Dockerfile.ollama` builds a single image with models pre-baked (useful for offline/air-gapped use):
+`Dockerfile.ollama` builds a single image with models pre-baked (useful for offline/air-gapped use):
 
 ```bash
 docker build -f Dockerfile.ollama -t modelclash-ollama \
@@ -103,18 +137,9 @@ docker build -f Dockerfile.ollama -t modelclash-ollama \
 docker run -d -p 11434:11434 --name ollama modelclash-ollama
 ```
 
-### User config file
-
-Persistent settings live at `~/.modelclash/config.json`. Manage via:
-
-```bash
-modelclash config            # show current config
-modelclash config --edit     # open in $EDITOR
-```
-
 ## Running the project
 
-All commands are run from the repo root.
+All commands run from the repo root.
 
 | What you want to do                      | Command                              |
 | ---------------------------------------- | ------------------------------------ |
@@ -132,7 +157,7 @@ The `--` separates npm flags from CLI flags, e.g.:
 
 ```bash
 npm run cli -- --help
-npm run cli:dev -- config
+npm run cli:dev -- chat
 npm run cli -- "Write a haiku about Mondays" --temperature 0.9
 ```
 
@@ -142,9 +167,10 @@ npm run cli -- "Write a haiku about Mondays" --temperature 0.9
 npm run build
 npm link    # makes `modelclash` available on your $PATH
 modelclash "your prompt"
+modelclash chat
 ```
 
-## CLI usage
+## CLI usage — one-shot
 
 ```bash
 modelclash "<prompt>" [options]
@@ -152,52 +178,55 @@ modelclash "<prompt>" [options]
 
 ### Flags
 
-| Flag                        | Description                | Default            |
-| --------------------------- | -------------------------- | ------------------ |
-| `--model-openai <model>`    | OpenAI model               | `gpt-4o`           |
-| `--model-anthropic <model>` | Anthropic model            | `claude-sonnet-4`  |
-| `--model-google <model>`    | Google model               | `gemini-2.5-pro`   |
-| `--model-groq <model>`      | Groq model                 | `llama-3.3-70b-versatile` |
-| `--model-deepseek <model>`  | DeepSeek model             | `deepseek-chat`    |
-| `--model-ollama <model>`    | Ollama model               | `llama3.2`         |
-| `-p, --providers <list>`    | Providers to use (comma-separated, e.g. `openai,groq`). If omitted in a TTY, an interactive picker appears. | all with keys |
-| `-t, --temperature <num>`   | Sampling temperature       | `0.7`              |
-| `--stream`                  | Stream responses           | `false`            |
-| `--json`                    | Output JSON only           | `false`            |
-| `--save <file>`             | Save JSON report to file   | —                  |
-| `--timeout <ms>`            | Request timeout in ms      | `60000`            |
+| Flag                        | Description                                                                                                | Default                  |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `--model-openai <model>`    | OpenAI model                                                                                               | `gpt-4o`                 |
+| `--model-anthropic <model>` | Anthropic model                                                                                            | `claude-sonnet-4`        |
+| `--model-google <model>`    | Google model                                                                                               | `gemini-2.5-pro`         |
+| `--model-groq <model>`      | Groq model                                                                                                 | `llama-3.3-70b-versatile`|
+| `--model-deepseek <model>`  | DeepSeek model                                                                                             | `deepseek-chat`          |
+| `--model-ollama <model>`    | Ollama model                                                                                               | `llama3.2`               |
+| `-p, --providers <list>`    | Providers to use (comma-separated, e.g. `openai,groq`). If omitted in a TTY, an interactive picker appears. | all with keys            |
+| `-t, --temperature <num>`   | Sampling temperature                                                                                       | `0.7`                    |
+| `--stream`                  | Stream responses                                                                                           | `false`                  |
+| `--json`                    | Output JSON only (suppresses the picker)                                                                   | `false`                  |
+| `--save <file>`             | Save JSON report to file                                                                                   | —                        |
+| `--timeout <ms>`            | Request timeout in ms                                                                                      | `60000`                  |
 
 ### Examples
 
 ```bash
-# Basic comparison
+# Basic comparison (interactive provider picker if a TTY)
 npm run cli -- "Explain quantum entanglement in one sentence."
 
-# Override a model and temperature
+# Pin providers and override a model
 npm run cli -- "Write a haiku about Mondays" \
+  --providers openai,groq \
   --model-openai gpt-4o-mini \
   --temperature 0.9
 
 # Stream + save JSON
 npm run cli -- "Summarize the Iliad" --stream --save out.json
 
-# Pure JSON output (for piping)
+# Pure JSON for piping
 npm run cli -- "Capital of Iceland?" --json | jq '.results[].text'
 
-# Only run specific providers (skip ones you don't want to use)
-npm run cli -- "Hello" --providers openai,groq
+# Only free providers
+npm run cli -- "Hello" --providers groq,google,deepseek,ollama
 ```
 
 ## Chat mode
 
-Multi-turn conversation against the providers you pick:
+Multi-turn conversation against the providers you pick. Responses stream live (sequentially per provider), and after each turn a comparison table summarises every model's tokens, cost, time, and throughput — with auto-badges for the fastest, cheapest, longest, and highest tok/s response.
 
 ```bash
-npm run cli -- chat                          # interactive picker
+npm run cli -- chat                          # interactive checkbox picker
 npm run cli -- chat --providers openai,groq  # explicit selection
+npm run cli -- chat -p groq -s "Be concise." # with a system prompt
+npm run cli -- chat -p ollama --no-stream    # disable streaming, show spinner
 ```
 
-In the REPL:
+### Slash commands
 
 | Command                       | Description                                   |
 | ----------------------------- | --------------------------------------------- |
@@ -216,9 +245,18 @@ In the REPL:
 | `/load <path>`                | load conversation from JSON                   |
 | end line with `\`             | multi-line input                              |
 
-Flags: `--system "<prompt>"`, `--no-stream`, `-p openai,groq`, plus per-provider `--model-<name>`, `-t`, `--timeout`.
+### Chat flags
 
-Responses stream live one provider at a time with a `↳ in↑ out↓ tok · $cost · seconds` footer. Conversation history is shared across providers — each turn's context includes everyone's prior replies. On exit, a session summary prints (turns, tokens, total cost).
+| Flag                        | Description                          |
+| --------------------------- | ------------------------------------ |
+| `-p, --providers <list>`    | Comma-separated providers            |
+| `-s, --system <prompt>`     | System prompt prepended to history   |
+| `--no-stream`               | Disable streaming, show a spinner    |
+| `--model-<provider> <name>` | Per-provider model override          |
+| `-t, --temperature <num>`   | Sampling temperature                 |
+| `--timeout <ms>`            | Request timeout in ms                |
+
+Conversation history is shared across providers — each turn's context includes everyone's prior replies. On exit, a session summary prints (turns, tokens, total cost).
 
 ## Project structure
 
@@ -226,12 +264,16 @@ Monorepo using npm workspaces.
 
 ```
 packages/
-  core/         # @modelclash/core — providers, pricing, retry, cost, formatter
-  cli/          # modelclash       — CLI entrypoint, command parsing
-  server/       # (optional) HTTP wrapper
+  core/                     # @modelclash/core — providers, pricing, retry, cost, orchestrator
+    src/providers/          # openai, anthropic, google, groq, openai-compatible (deepseek + ollama)
+  cli/                      # modelclash — CLI entrypoint, chat REPL, config command
+  server/                   # (optional) HTTP wrapper
 .github/
   workflows/
-    ci.yml      # PR + main: build & test on Node 18/20/22
+    ci.yml                  # PR + main: build & test on Node 18/20/22
+docker-compose.yml          # Ollama service with auto model pull
+Dockerfile.ollama           # single image with models baked in
+.env.example                # template for environment configuration
 ```
 
 ## Continuous Integration
@@ -246,18 +288,21 @@ Every pull request to `main` runs `.github/workflows/ci.yml`:
 
 ## Sharing for testing
 
-When sending this repo to someone for testing, point them at the [Quick start](#quick-start-for-testers) section. They need: Node ≥ 18, the repo, and at least one API key.
+When sending this repo to someone for testing, point them at the [Quick start](#quick-start-for-testers) and the [free API keys](#free-api-keys) table. They need: Node ≥ 18, the repo, and either one API key or a local Ollama install.
 
 ## Keeping the README up to date
 
 This README is the contract with anyone running the project. When a PR changes any of the following, update the matching section in the **same PR**:
 
-- New/removed/renamed CLI flag → **CLI usage › Flags**
+- New/removed/renamed CLI flag → **CLI usage › Flags** or **Chat flags**
+- New/changed slash command → **Chat mode › Slash commands**
 - New/changed npm script → **Running the project**
 - New env var or config field → **Configuration**
+- New provider → **Features**, **Configuration**, **Flags**, free-tier table, project structure
 - New package or moved directory → **Project structure**
 - Change to CI steps or Node matrix → **Continuous Integration**
 - Change to install or run steps → **Quick start**
+- New Docker file or compose change → **Running Ollama in Docker**
 
 ## License
 
