@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import Groq from "groq-sdk";
 import type { LLMProvider } from "../interfaces/provider.js";
 import type {
   ProviderRequest,
@@ -7,12 +7,12 @@ import type {
 import { estimateCost } from "../utils/cost.js";
 import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 
-export class OpenAIProvider implements LLMProvider {
-  readonly name = "openai" as const;
-  private client: OpenAI;
+export class GroqProvider implements LLMProvider {
+  readonly name = "groq" as const;
+  private client: Groq;
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new Groq({ apiKey });
   }
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {
@@ -57,7 +57,6 @@ export class OpenAIProvider implements LLMProvider {
       temperature: req.temperature,
       messages: [{ role: "user", content: req.prompt }],
       stream: true,
-      stream_options: { include_usage: true },
     });
 
     let text = "";
@@ -68,11 +67,12 @@ export class OpenAIProvider implements LLMProvider {
         text += delta;
         onChunk(delta);
       }
-      if (chunk.usage) {
+      const x = chunk as { x_groq?: { usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } } };
+      if (x.x_groq?.usage) {
         usage = {
-          input: chunk.usage.prompt_tokens,
-          output: chunk.usage.completion_tokens,
-          total: chunk.usage.total_tokens,
+          input: x.x_groq.usage.prompt_tokens,
+          output: x.x_groq.usage.completion_tokens,
+          total: x.x_groq.usage.total_tokens,
         };
       }
     }

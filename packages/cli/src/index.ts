@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import "dotenv/config";
+import { loadDotenv } from "./env.js";
+loadDotenv();
 import { Command } from "commander";
 import chalk from "chalk";
 import { writeFile } from "node:fs/promises";
@@ -8,6 +9,7 @@ import {
   loadConfig,
   resolveSettings,
   buildProvidersFromSettings,
+  configuredProvidersFromSettings,
   DEFAULT_MODELS,
 } from "@modelclash/core";
 import {
@@ -17,16 +19,26 @@ import {
   toJsonReport,
 } from "./formatter.js";
 import { buildConfigCommand } from "./config-cmd.js";
+import { buildChatCommand } from "./chat-cmd.js";
+import {
+  parseProviderList,
+  filterProviders,
+  pickProvidersInteractive,
+} from "./select.js";
 
 interface PromptCliOptions {
   modelOpenai?: string;
   modelAnthropic?: string;
   modelGoogle?: string;
+  modelGroq?: string;
+  modelDeepseek?: string;
+  modelOllama?: string;
   temperature?: number;
   stream?: boolean;
   json: boolean;
   save?: string;
   timeout?: number;
+  providers?: string;
 }
 
 const program = new Command();
@@ -39,6 +51,10 @@ program
   .option("--model-openai <model>", `OpenAI model (default: ${DEFAULT_MODELS.openai})`)
   .option("--model-anthropic <model>", `Anthropic model (default: ${DEFAULT_MODELS.anthropic})`)
   .option("--model-google <model>", `Google model (default: ${DEFAULT_MODELS.google})`)
+  .option("--model-groq <model>", `Groq model (default: ${DEFAULT_MODELS.groq})`)
+  .option("--model-deepseek <model>", `DeepSeek model (default: ${DEFAULT_MODELS.deepseek})`)
+  .option("--model-ollama <model>", `Ollama model (default: ${DEFAULT_MODELS.ollama})`)
+  .option("-p, --providers <list>", "Comma-separated providers to use (e.g. openai,groq)")
   .option("-t, --temperature <number>", "Sampling temperature", parseFloat)
   .option("--stream", "Stream responses (sequential)")
   .option("--json", "Output JSON only", false)
@@ -54,6 +70,7 @@ program
   });
 
 program.addCommand(buildConfigCommand());
+program.addCommand(buildChatCommand());
 
 async function runCli(prompt: string, opts: PromptCliOptions): Promise<void> {
   const config = await loadConfig();
@@ -61,16 +78,37 @@ async function runCli(prompt: string, opts: PromptCliOptions): Promise<void> {
     modelOpenai: opts.modelOpenai,
     modelAnthropic: opts.modelAnthropic,
     modelGoogle: opts.modelGoogle,
+    modelGroq: opts.modelGroq,
+    modelDeepseek: opts.modelDeepseek,
+    modelOllama: opts.modelOllama,
     temperature: opts.temperature,
     timeoutMs: opts.timeout,
     stream: opts.stream,
   });
 
-  const providers = buildProvidersFromSettings(settings);
-  if (providers.length === 0) {
+  const allProviders = buildProvidersFromSettings(settings);
+  if (allProviders.length === 0) {
     throw new Error(
-      "No API keys configured. Run `modelclash config init`, set apiKeys in your config, or export OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY.",
+      "No API keys configured. Run `modelclash config init`, set apiKeys in your config, or export OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY / GROQ_API_KEY / DEEPSEEK_API_KEY / OLLAMA_BASE_URL.",
     );
+  }
+
+  const available = configuredProvidersFromSettings(settings);
+  let providers = allProviders;
+  if (opts.providers) {
+    const requested = parseProviderList(opts.providers);
+    const missing = requested.filter((p) => !available.includes(p));
+    if (missing.length > 0 && !opts.json) {
+      console.log(chalk.yellow(`Skipping (no API key): ${missing.join(", ")}`));
+    }
+    providers = filterProviders(allProviders, requested);
+  } else if (!opts.json && process.stdin.isTTY && available.length > 1) {
+    const selected = await pickProvidersInteractive(available);
+    providers = filterProviders(allProviders, selected);
+  }
+
+  if (providers.length === 0) {
+    throw new Error("No providers selected.");
   }
 
   if (!opts.json) {

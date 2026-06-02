@@ -1,4 +1,10 @@
-export type ProviderName = "openai" | "anthropic" | "google";
+export type ProviderName =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "groq"
+  | "deepseek"
+  | "ollama";
 
 export interface TokenUsage {
   input: number;
@@ -6,8 +12,14 @@ export interface TokenUsage {
   total: number;
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface ProviderRequest {
   prompt: string;
+  history?: ChatMessage[];
   model: string;
   temperature?: number;
   stream?: boolean;
@@ -38,6 +50,9 @@ export interface CliOptions {
   modelOpenai: string;
   modelAnthropic: string;
   modelGoogle: string;
+  modelGroq: string;
+  modelDeepseek: string;
+  modelOllama: string;
   temperature: number;
   stream: boolean;
   json: boolean;

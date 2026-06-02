@@ -97,6 +97,15 @@ export function buildConfigCommand(): Command {
       if (anthropicKey) next.apiKeys.anthropic = anthropicKey;
       const googleKey = await ask("Google API key", cfg.apiKeys?.google);
       if (googleKey) next.apiKeys.google = googleKey;
+      const groqKey = await ask("Groq API key", cfg.apiKeys?.groq);
+      if (groqKey) next.apiKeys.groq = groqKey;
+      const deepseekKey = await ask("DeepSeek API key", cfg.apiKeys?.deepseek);
+      if (deepseekKey) next.apiKeys.deepseek = deepseekKey;
+      const ollamaUrl = await ask(
+        "Ollama base URL (blank to skip, e.g. http://localhost:11434/v1)",
+        cfg.apiKeys?.ollama,
+      );
+      if (ollamaUrl) next.apiKeys.ollama = ollamaUrl;
 
       const openaiModel = await ask("Default OpenAI model", cfg.defaultModels?.openai ?? "gpt-4o");
       if (openaiModel) next.defaultModels.openai = openaiModel;
@@ -104,6 +113,12 @@ export function buildConfigCommand(): Command {
       if (anthropicModel) next.defaultModels.anthropic = anthropicModel;
       const googleModel = await ask("Default Google model", cfg.defaultModels?.google ?? "gemini-2.5-pro");
       if (googleModel) next.defaultModels.google = googleModel;
+      const groqModel = await ask("Default Groq model", cfg.defaultModels?.groq ?? "llama-3.3-70b-versatile");
+      if (groqModel) next.defaultModels.groq = groqModel;
+      const deepseekModel = await ask("Default DeepSeek model", cfg.defaultModels?.deepseek ?? "deepseek-chat");
+      if (deepseekModel) next.defaultModels.deepseek = deepseekModel;
+      const ollamaModel = await ask("Default Ollama model", cfg.defaultModels?.ollama ?? "llama3.2");
+      if (ollamaModel) next.defaultModels.ollama = ollamaModel;
 
       rl.close();
       const path = await saveConfig(next);
@@ -120,6 +135,9 @@ function redact(cfg: ModelclashConfig): ModelclashConfig {
     openai: cfg.apiKeys.openai ? maskKey(cfg.apiKeys.openai) : undefined,
     anthropic: cfg.apiKeys.anthropic ? maskKey(cfg.apiKeys.anthropic) : undefined,
     google: cfg.apiKeys.google ? maskKey(cfg.apiKeys.google) : undefined,
+    groq: cfg.apiKeys.groq ? maskKey(cfg.apiKeys.groq) : undefined,
+    deepseek: cfg.apiKeys.deepseek ? maskKey(cfg.apiKeys.deepseek) : undefined,
+    ollama: cfg.apiKeys.ollama,
   };
   return copy;
 }

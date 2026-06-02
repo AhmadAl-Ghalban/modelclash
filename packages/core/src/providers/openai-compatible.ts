@@ -1,18 +1,26 @@
 import OpenAI from "openai";
 import type { LLMProvider } from "../interfaces/provider.js";
 import type {
+  ProviderName,
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
 import { estimateCost } from "../utils/cost.js";
 import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 
-export class OpenAIProvider implements LLMProvider {
-  readonly name = "openai" as const;
+export interface OpenAICompatibleOptions {
+  name: ProviderName;
+  baseURL: string;
+  apiKey: string;
+}
+
+export class OpenAICompatibleProvider implements LLMProvider {
+  readonly name: ProviderName;
   private client: OpenAI;
 
-  constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+  constructor(opts: OpenAICompatibleOptions) {
+    this.name = opts.name;
+    this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL });
   }
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {
@@ -55,7 +63,10 @@ export class OpenAIProvider implements LLMProvider {
     const stream = await this.client.chat.completions.create({
       model: req.model,
       temperature: req.temperature,
-      messages: [{ role: "user", content: req.prompt }],
+      messages: [
+        ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content: req.prompt },
+      ],
       stream: true,
       stream_options: { include_usage: true },
     });
@@ -85,5 +96,17 @@ export class OpenAIProvider implements LLMProvider {
       costUsd: estimateCost(req.model, usage),
       durationMs: Date.now() - start,
     };
+  }
+}
+
+export class DeepSeekProvider extends OpenAICompatibleProvider {
+  constructor(apiKey: string) {
+    super({ name: "deepseek", baseURL: "https://api.deepseek.com/v1", apiKey });
+  }
+}
+
+export class OllamaProvider extends OpenAICompatibleProvider {
+  constructor(baseURL = "http://localhost:11434/v1") {
+    super({ name: "ollama", baseURL, apiKey: "ollama" });
   }
 }

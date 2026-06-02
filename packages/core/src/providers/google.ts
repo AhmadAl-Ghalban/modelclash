@@ -17,10 +17,11 @@ export class GoogleProvider implements LLMProvider {
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {
     const start = Date.now();
+    const contents = buildGoogleContents(req);
     const call = () =>
       this.client.models.generateContent({
         model: req.model,
-        contents: req.prompt,
+        contents,
         config: { temperature: req.temperature },
       });
 
@@ -53,7 +54,7 @@ export class GoogleProvider implements LLMProvider {
     const start = Date.now();
     const stream = await this.client.models.generateContentStream({
       model: req.model,
-      contents: req.prompt,
+      contents: buildGoogleContents(req),
       config: { temperature: req.temperature },
     });
 
@@ -84,4 +85,16 @@ export class GoogleProvider implements LLMProvider {
       durationMs: Date.now() - start,
     };
   }
+}
+
+function buildGoogleContents(req: ProviderRequest) {
+  const history = req.history ?? [];
+  if (history.length === 0) return req.prompt;
+  return [
+    ...history.map((m) => ({
+      role: m.role === "assistant" ? "model" : "user",
+      parts: [{ text: m.content }],
+    })),
+    { role: "user", parts: [{ text: req.prompt }] },
+  ];
 }

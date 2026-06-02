@@ -22,7 +22,10 @@ export class AnthropicProvider implements LLMProvider {
         model: req.model,
         max_tokens: 4096,
         temperature: req.temperature,
-        messages: [{ role: "user", content: req.prompt }],
+        messages: [
+        ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content: req.prompt },
+      ],
       });
 
     const res = await retryWithBackoff(() =>
@@ -62,7 +65,10 @@ export class AnthropicProvider implements LLMProvider {
       model: req.model,
       max_tokens: 4096,
       temperature: req.temperature,
-      messages: [{ role: "user", content: req.prompt }],
+      messages: [
+        ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content: req.prompt },
+      ],
     });
 
     stream.on("text", (delta) => {

@@ -1,0 +1,35 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: modelclash-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot sidecar that pulls the default model after the server is up,
+  # then exits. Re-run with `docker compose run --rm ollama-pull` to grab more.
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: modelclash-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - MODELS=${OLLAMA_MODELS:-llama3.2}
+    entrypoint: /bin/sh
+    command: -c 'for m in $${MODELS}; do echo "Pulling $$m..."; ollama pull "$$m"; done'
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: "no"
+
+volumes:
+  ollama-models:
+    name: modelclash-ollama-models
