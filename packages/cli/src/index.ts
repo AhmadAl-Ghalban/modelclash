@@ -4,12 +4,11 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { writeFile } from "node:fs/promises";
 import {
-  OpenAIProvider,
-  AnthropicProvider,
-  GoogleProvider,
   runPrompt,
-  type LLMProvider,
-  type ProviderName,
+  loadConfig,
+  resolveSettings,
+  buildProvidersFromSettings,
+  DEFAULT_MODELS,
 } from "@modelclash/core";
 import {
   formatHeader,
@@ -17,23 +16,18 @@ import {
   formatSummaryTable,
   toJsonReport,
 } from "./formatter.js";
+import { buildConfigCommand } from "./config-cmd.js";
 
-interface CliOptions {
-  modelOpenai: string;
-  modelAnthropic: string;
-  modelGoogle: string;
-  temperature: number;
-  stream: boolean;
+interface PromptCliOptions {
+  modelOpenai?: string;
+  modelAnthropic?: string;
+  modelGoogle?: string;
+  temperature?: number;
+  stream?: boolean;
   json: boolean;
   save?: string;
-  timeout: number;
+  timeout?: number;
 }
-
-const DEFAULTS = {
-  openai: process.env.DEFAULT_OPENAI_MODEL ?? "gpt-4o",
-  anthropic: process.env.DEFAULT_ANTHROPIC_MODEL ?? "claude-sonnet-4",
-  google: process.env.DEFAULT_GOOGLE_MODEL ?? "gemini-2.5-pro",
-};
 
 const program = new Command();
 
@@ -42,44 +36,40 @@ program
   .description("Compare responses from OpenAI, Anthropic, and Google models side-by-side")
   .version("1.0.0")
   .argument("<prompt>", "The prompt to send to all providers")
-  .option("--model-openai <model>", "OpenAI model", DEFAULTS.openai)
-  .option("--model-anthropic <model>", "Anthropic model", DEFAULTS.anthropic)
-  .option("--model-google <model>", "Google model", DEFAULTS.google)
-  .option("-t, --temperature <number>", "Sampling temperature", parseFloat, 0.7)
-  .option("--stream", "Stream responses (sequential)", false)
+  .option("--model-openai <model>", `OpenAI model (default: ${DEFAULT_MODELS.openai})`)
+  .option("--model-anthropic <model>", `Anthropic model (default: ${DEFAULT_MODELS.anthropic})`)
+  .option("--model-google <model>", `Google model (default: ${DEFAULT_MODELS.google})`)
+  .option("-t, --temperature <number>", "Sampling temperature", parseFloat)
+  .option("--stream", "Stream responses (sequential)")
   .option("--json", "Output JSON only", false)
   .option("--save <file>", "Save report to file")
-  .option(
-    "--timeout <ms>",
-    "Request timeout in ms",
-    (v) => parseInt(v, 10),
-    parseInt(process.env.REQUEST_TIMEOUT_MS ?? "60000", 10),
-  )
-  .action(async (prompt: string, rawOpts) => {
-    const opts: CliOptions = {
-      modelOpenai: rawOpts.modelOpenai,
-      modelAnthropic: rawOpts.modelAnthropic,
-      modelGoogle: rawOpts.modelGoogle,
-      temperature: rawOpts.temperature,
-      stream: rawOpts.stream,
-      json: rawOpts.json,
-      save: rawOpts.save,
-      timeout: rawOpts.timeout,
-    };
+  .option("--timeout <ms>", "Request timeout in ms", (v) => parseInt(v, 10))
+  .action(async (prompt: string, rawOpts: PromptCliOptions) => {
     try {
-      await run(prompt, opts);
+      await runCli(prompt, rawOpts);
     } catch (err) {
       console.error(chalk.red("Fatal:"), (err as Error).message);
       process.exit(1);
     }
   });
 
-async function run(prompt: string, opts: CliOptions): Promise<void> {
-  const providers = buildProviders();
+program.addCommand(buildConfigCommand());
 
+async function runCli(prompt: string, opts: PromptCliOptions): Promise<void> {
+  const config = await loadConfig();
+  const settings = resolveSettings(config, process.env, {
+    modelOpenai: opts.modelOpenai,
+    modelAnthropic: opts.modelAnthropic,
+    modelGoogle: opts.modelGoogle,
+    temperature: opts.temperature,
+    timeoutMs: opts.timeout,
+    stream: opts.stream,
+  });
+
+  const providers = buildProvidersFromSettings(settings);
   if (providers.length === 0) {
     throw new Error(
-      "No API keys configured. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY.",
+      "No API keys configured. Run `modelclash config init`, set apiKeys in your config, or export OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY.",
     );
   }
 
@@ -87,19 +77,13 @@ async function run(prompt: string, opts: CliOptions): Promise<void> {
     console.log(formatHeader(prompt));
   }
 
-  const modelFor: Record<ProviderName, string> = {
-    openai: opts.modelOpenai,
-    anthropic: opts.modelAnthropic,
-    google: opts.modelGoogle,
-  };
-
   const results = await runPrompt({
     prompt,
     providers,
-    modelFor,
-    temperature: opts.temperature,
-    timeoutMs: opts.timeout,
-    stream: opts.stream,
+    modelFor: settings.models,
+    temperature: settings.temperature,
+    timeoutMs: settings.timeoutMs,
+    stream: settings.stream,
     onChunk: opts.json
       ? undefined
       : (_, chunk) => process.stdout.write(chalk.dim(chunk)),
@@ -125,20 +109,6 @@ async function run(prompt: string, opts: CliOptions): Promise<void> {
 
   const allFailed = results.every((r) => !r.ok);
   if (allFailed) process.exit(1);
-}
-
-function buildProviders(): LLMProvider[] {
-  const out: LLMProvider[] = [];
-  if (process.env.OPENAI_API_KEY) {
-    out.push(new OpenAIProvider(process.env.OPENAI_API_KEY));
-  }
-  if (process.env.ANTHROPIC_API_KEY) {
-    out.push(new AnthropicProvider(process.env.ANTHROPIC_API_KEY));
-  }
-  if (process.env.GOOGLE_API_KEY) {
-    out.push(new GoogleProvider(process.env.GOOGLE_API_KEY));
-  }
-  return out;
 }
 
 program.parseAsync(process.argv);
