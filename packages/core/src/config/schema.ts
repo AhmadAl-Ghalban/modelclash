@@ -4,12 +4,18 @@ export interface ApiKeys {
   openai?: string;
   anthropic?: string;
   google?: string;
+  groq?: string;
+  deepseek?: string;
+  ollama?: string;
 }
 
 export interface DefaultModels {
   openai?: string;
   anthropic?: string;
   google?: string;
+  groq?: string;
+  deepseek?: string;
+  ollama?: string;
 }
 
 export interface ConfigDefaults {
@@ -22,6 +28,9 @@ export interface ModelGroup {
   openai?: string;
   anthropic?: string;
   google?: string;
+  groq?: string;
+  deepseek?: string;
+  ollama?: string;
 }
 
 export interface ModelclashConfig {

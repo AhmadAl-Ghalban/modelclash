@@ -1,11 +1,13 @@
 import type { LLMProvider } from "./interfaces/provider.js";
 import type {
+  ChatMessage,
   ProviderName,
   ProviderResult,
 } from "./types/index.js";
 
 export interface RunPromptOptions {
   prompt: string;
+  history?: ChatMessage[];
   providers: LLMProvider[];
   modelFor: Record<ProviderName, string>;
   temperature: number;
@@ -17,13 +19,13 @@ export interface RunPromptOptions {
 export async function runPrompt(
   opts: RunPromptOptions,
 ): Promise<ProviderResult[]> {
-  const { providers, prompt, modelFor, temperature, timeoutMs, stream, onChunk } = opts;
+  const { providers, prompt, history, modelFor, temperature, timeoutMs, stream, onChunk } = opts;
 
   const tasks = providers.map(async (p): Promise<ProviderResult> => {
     const model = modelFor[p.name];
     const start = Date.now();
     try {
-      const req = { prompt, model, temperature, timeoutMs };
+      const req = { prompt, history, model, temperature, timeoutMs };
       const value = stream && p.streamGenerate
         ? await p.streamGenerate(req, (chunk) => onChunk?.(p.name, chunk))
         : await p.generate(req);

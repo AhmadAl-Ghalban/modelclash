@@ -1,12 +1,12 @@
 # modelclash ⚔️
 
-A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**, and **Google** models side-by-side from a single prompt.
+A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**, **Google**, **Groq**, **DeepSeek**, and local **Ollama** models side-by-side from a single prompt.
 
 > **Keep this file in sync.** Whenever you add, remove, or change a feature, flag, script, env var, or run step, update the matching section of this README in the **same PR**. CI (see [Continuous Integration](#continuous-integration)) does not check docs — reviewers do.
 
 ## Features
 
-- Parallel calls to OpenAI, Anthropic, and Google via official SDKs
+- Parallel calls to OpenAI, Anthropic, Google, Groq, DeepSeek, and Ollama (local)
 - Token usage reporting and per-model cost estimation
 - Configurable per-provider model selection, temperature, and timeout
 - Optional streaming (sequential) output
@@ -14,13 +14,15 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 - Retry with exponential backoff and per-request timeouts
 - Colored terminal UI with side-by-side summary table
 - User config at `~/.modelclash/config.json` (managed via `modelclash config`)
+- Pick which providers to run (`--providers openai,groq` or interactive picker)
+- Multi-turn `modelclash chat` REPL with conversation history
 - TypeScript strict mode, Vitest unit tests, npm workspaces monorepo
 
 ## Requirements
 
 - **Node.js ≥ 18** (CI tests on 18, 20, 22)
 - **npm** (workspaces support — bundled with Node 18+)
-- API keys for at least one of: OpenAI, Anthropic, Google
+- API keys for at least one of: OpenAI, Anthropic, Google, Groq
 
 ## Quick start (for testers)
 
@@ -51,6 +53,54 @@ Providers without configured keys are simply skipped, so a single key is enough 
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=AIza...
+GROQ_API_KEY=gsk_...
+DEEPSEEK_API_KEY=sk-...
+OLLAMA_BASE_URL=http://localhost:11434/v1
+```
+
+**Free API keys** to try modelclash without spending money:
+
+| Provider     | Free tier                                                                              | Sign-up                               |
+| ------------ | -------------------------------------------------------------------------------------- | ------------------------------------- |
+| **Groq**     | Generous free rate limits, very fast Llama 3.3 70B                                     | https://console.groq.com/keys         |
+| **Google**   | Free Gemini tier (15 RPM)                                                              | https://aistudio.google.com/apikey    |
+| **DeepSeek** | Free starter credits, strong reasoning (`deepseek-chat`, `deepseek-reasoner`)          | https://platform.deepseek.com         |
+| **Ollama**   | 100% local — no key, no network. Install Ollama, `ollama pull llama3.2`, set base URL  | https://ollama.com                    |
+
+#### Running Ollama in Docker
+
+If you don't want to install Ollama on your host, use the bundled `docker-compose.yml`:
+
+```bash
+# Start Ollama + auto-pull the default model (llama3.2)
+docker compose up -d
+
+# Pull additional models on demand
+OLLAMA_MODELS="qwen2.5 llama3.1" docker compose run --rm ollama-pull
+
+# Tail logs
+docker compose logs -f ollama
+
+# Stop (keeps the model volume)
+docker compose down
+
+# Stop AND delete downloaded models
+docker compose down -v
+```
+
+Then point modelclash at the container:
+
+```bash
+export OLLAMA_BASE_URL=http://localhost:11434/v1
+npm run cli -- chat -p ollama
+```
+
+Alternatively, `Dockerfile.ollama` builds a single image with models pre-baked (useful for offline/air-gapped use):
+
+```bash
+docker build -f Dockerfile.ollama -t modelclash-ollama \
+  --build-arg OLLAMA_MODELS="llama3.2 qwen2.5" .
+docker run -d -p 11434:11434 --name ollama modelclash-ollama
 ```
 
 ### User config file
@@ -107,6 +157,10 @@ modelclash "<prompt>" [options]
 | `--model-openai <model>`    | OpenAI model               | `gpt-4o`           |
 | `--model-anthropic <model>` | Anthropic model            | `claude-sonnet-4`  |
 | `--model-google <model>`    | Google model               | `gemini-2.5-pro`   |
+| `--model-groq <model>`      | Groq model                 | `llama-3.3-70b-versatile` |
+| `--model-deepseek <model>`  | DeepSeek model             | `deepseek-chat`    |
+| `--model-ollama <model>`    | Ollama model               | `llama3.2`         |
+| `-p, --providers <list>`    | Providers to use (comma-separated, e.g. `openai,groq`). If omitted in a TTY, an interactive picker appears. | all with keys |
 | `-t, --temperature <num>`   | Sampling temperature       | `0.7`              |
 | `--stream`                  | Stream responses           | `false`            |
 | `--json`                    | Output JSON only           | `false`            |
@@ -129,7 +183,42 @@ npm run cli -- "Summarize the Iliad" --stream --save out.json
 
 # Pure JSON output (for piping)
 npm run cli -- "Capital of Iceland?" --json | jq '.results[].text'
+
+# Only run specific providers (skip ones you don't want to use)
+npm run cli -- "Hello" --providers openai,groq
 ```
+
+## Chat mode
+
+Multi-turn conversation against the providers you pick:
+
+```bash
+npm run cli -- chat                          # interactive picker
+npm run cli -- chat --providers openai,groq  # explicit selection
+```
+
+In the REPL:
+
+| Command                       | Description                                   |
+| ----------------------------- | --------------------------------------------- |
+| `/help`, `/?`                 | list commands                                 |
+| `/exit`, `/q`                 | leave the chat (or Ctrl+D)                    |
+| `/clear`                      | clear the screen                              |
+| `/reset`                      | clear conversation history                    |
+| `/history`                    | print conversation history                    |
+| `/providers`                  | list selected providers + models              |
+| `/stats`                      | session totals (turns, tokens, cost)          |
+| `/stream`                     | toggle streaming on/off                       |
+| `/temp <n>`                   | change sampling temperature                   |
+| `/system <text>`              | set system prompt (`/system off` to clear)    |
+| `/model <provider> <name>`    | switch a provider's model mid-chat            |
+| `/save <path>`                | save conversation to JSON                     |
+| `/load <path>`                | load conversation from JSON                   |
+| end line with `\`             | multi-line input                              |
+
+Flags: `--system "<prompt>"`, `--no-stream`, `-p openai,groq`, plus per-provider `--model-<name>`, `-t`, `--timeout`.
+
+Responses stream live one provider at a time with a `↳ in↑ out↓ tok · $cost · seconds` footer. Conversation history is shared across providers — each turn's context includes everyone's prior replies. On exit, a session summary prints (turns, tokens, total cost).
 
 ## Project structure
 

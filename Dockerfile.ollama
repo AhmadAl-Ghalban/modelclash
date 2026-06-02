@@ -1,0 +1,16 @@
+FROM ollama/ollama:latest
+
+# Pre-pulled models bake into the image so the container is ready offline.
+# Build with:  docker build -f Dockerfile.ollama -t modelclash-ollama .
+# Override with:  --build-arg OLLAMA_MODELS="llama3.2 qwen2.5:7b"
+ARG OLLAMA_MODELS="llama3.2"
+
+EXPOSE 11434
+
+# Start the server, pull the models, then keep the server running in the foreground.
+RUN /bin/sh -c 'ollama serve & \
+    server_pid=$!; \
+    until ollama list >/dev/null 2>&1; do sleep 1; done; \
+    for m in $OLLAMA_MODELS; do echo "Pulling $m..."; ollama pull "$m"; done; \
+    kill $server_pid; \
+    wait $server_pid 2>/dev/null || true'
