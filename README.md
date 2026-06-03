@@ -14,7 +14,12 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 - Retry with exponential backoff and per-request timeouts
 - User config at `~/.modelclash/config.json` (managed via `modelclash config`)
 - Provider selection: `--providers openai,groq` flag or interactive checkbox picker
-- Multi-turn `modelclash chat` REPL with conversation history, slash commands, system prompts, session save/load, mid-chat model swap, and a per-turn comparison table (fastest / cheapest / longest / highest tok/s badges)
+- Multi-turn `modelclash chat` REPL with:
+  - **Claude-Code-style slash menu** — type `/` and a live-filtered command list pops up under the prompt (↑/↓ navigate, Enter selects, Tab autocompletes, Esc dismisses, Backspace removes the `/` to hide)
+  - **Interactive model picker** — on startup and via `/model`, pick a provider then a model from a list (or `✎ custom…` to type your own)
+  - **Reasoning effort selection** — when you pick an effort-capable model (OpenAI `o1` / `o1-mini`, DeepSeek `deepseek-reasoner`), choose `low` / `medium` / `high` with one-line trade-off descriptions; sent through as `reasoning_effort`
+  - Conversation history, system prompts, session save/load (`.json` or `.md`), mid-chat model swap, `/retry` for the last user message
+  - Per-turn comparison table with fastest / cheapest / longest / highest tok/s badges
 - Bundled Docker setup for running Ollama locally
 - TypeScript strict mode, Vitest unit tests, npm workspaces monorepo
 
@@ -220,30 +225,50 @@ npm run cli -- "Hello" --providers groq,google,deepseek,ollama
 Multi-turn conversation against the providers you pick. Responses stream live (sequentially per provider), and after each turn a comparison table summarises every model's tokens, cost, time, and throughput — with auto-badges for the fastest, cheapest, longest, and highest tok/s response.
 
 ```bash
-npm run cli -- chat                          # interactive checkbox picker
-npm run cli -- chat --providers openai,groq  # explicit selection
+npm run cli -- chat                          # interactive provider + model picker
+npm run cli -- chat --providers openai,groq  # explicit provider selection
 npm run cli -- chat -p groq -s "Be concise." # with a system prompt
 npm run cli -- chat -p ollama --no-stream    # disable streaming, show spinner
 ```
 
+On startup, after the provider checkbox, you'll be prompted to pick a model for each selected provider (skipped for any provider you set via `--model-<name>` flag). If the model supports reasoning effort, you'll then pick `low` / `medium` / `high`.
+
+### Live slash menu
+
+Type `/` at any prompt and a filtered command list appears under the cursor — no Enter required.
+
+| Key            | Action                                                  |
+| -------------- | ------------------------------------------------------- |
+| `/`            | open the menu (must be the first char of the line)      |
+| type letters   | live-filter (`/mo` → `/model`)                          |
+| ↑ / ↓          | move selection                                          |
+| Enter          | run the highlighted command                             |
+| Tab            | autocomplete the highlighted command into the buffer    |
+| Backspace      | delete a char (deleting the leading `/` hides the menu) |
+| Esc            | clear the buffer and hide the menu                      |
+| Ctrl-C         | exit the chat                                           |
+
 ### Slash commands
 
-| Command                       | Description                                   |
-| ----------------------------- | --------------------------------------------- |
-| `/help`, `/?`                 | list commands                                 |
-| `/exit`, `/q`                 | leave the chat (or Ctrl+D)                    |
-| `/clear`                      | clear the screen                              |
-| `/reset`                      | clear conversation history                    |
-| `/history`                    | print conversation history                    |
-| `/providers`                  | list selected providers + models              |
-| `/stats`                      | session totals (turns, tokens, cost)          |
-| `/stream`                     | toggle streaming on/off                       |
-| `/temp <n>`                   | change sampling temperature                   |
-| `/system <text>`              | set system prompt (`/system off` to clear)    |
-| `/model <provider> <name>`    | switch a provider's model mid-chat            |
-| `/save <path>`                | save conversation to JSON                     |
-| `/load <path>`                | load conversation from JSON                   |
-| end line with `\`             | multi-line input                              |
+| Command                       | Description                                                            |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `/help`, `/?`                 | list commands                                                          |
+| `/exit`, `/q`                 | leave the chat (or Ctrl+D)                                             |
+| `/clear`                      | clear the screen                                                       |
+| `/reset`                      | clear conversation history                                             |
+| `/retry`                      | re-run the last user message (drops the previous assistant turn)       |
+| `/history`                    | print conversation history                                             |
+| `/providers`                  | list selected providers + models                                       |
+| `/stats`                      | session totals (turns, tokens, cost)                                   |
+| `/stream`                     | toggle streaming on/off                                                |
+| `/temp <n>`                   | change sampling temperature                                            |
+| `/system <text>`              | set system prompt (`/system off` to clear)                             |
+| `/model`                      | pick provider, then model, then effort (interactive)                   |
+| `/model <provider>`           | pick model + effort for one provider                                   |
+| `/model <provider> <name>`    | set a model directly (effort prompt only if model supports it)         |
+| `/effort <provider> <lvl>`    | set reasoning effort: `low` / `medium` / `high`                        |
+| `/save [path]`                | save transcript — `.md` for prose, `.json` to round-trip with `/load`  |
+| `/load <path>`                | load conversation from JSON                                            |
 
 ### Chat flags
 
@@ -257,6 +282,16 @@ npm run cli -- chat -p ollama --no-stream    # disable streaming, show spinner
 | `--timeout <ms>`            | Request timeout in ms                |
 
 Conversation history is shared across providers — each turn's context includes everyone's prior replies. On exit, a session summary prints (turns, tokens, total cost).
+
+### Reasoning effort
+
+Models that accept a reasoning-effort hint (currently OpenAI `o1`, `o1-mini`, and DeepSeek `deepseek-reasoner`) are detected automatically. When you pick one of them, you'll be prompted to choose:
+
+- **low** — fastest, cheapest, shallow reasoning
+- **medium** — balanced (default)
+- **high** — deepest reasoning, slower & costlier
+
+The selection is sent to the API as `reasoning_effort`. For other models the prompt is skipped silently and any previously stored effort is cleared.
 
 ## Project structure
 
@@ -295,7 +330,8 @@ When sending this repo to someone for testing, point them at the [Quick start](#
 This README is the contract with anyone running the project. When a PR changes any of the following, update the matching section in the **same PR**:
 
 - New/removed/renamed CLI flag → **CLI usage › Flags** or **Chat flags**
-- New/changed slash command → **Chat mode › Slash commands**
+- New/changed slash command → **Chat mode › Slash commands** (and **Live slash menu** if its key bindings change)
+- New reasoning/effort plumbing or model-picker behaviour → **Chat mode › Reasoning effort**
 - New/changed npm script → **Running the project**
 - New env var or config field → **Configuration**
 - New provider → **Features**, **Configuration**, **Flags**, free-tier table, project structure

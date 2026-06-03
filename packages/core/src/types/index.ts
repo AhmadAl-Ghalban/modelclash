@@ -17,6 +17,8 @@ export interface ChatMessage {
   content: string;
 }
 
+export type ReasoningEffort = "low" | "medium" | "high";
+
 export interface ProviderRequest {
   prompt: string;
   history?: ChatMessage[];
@@ -24,6 +26,7 @@ export interface ProviderRequest {
   temperature?: number;
   stream?: boolean;
   timeoutMs?: number;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ProviderResponse {

@@ -7,6 +7,10 @@ import type {
 import { estimateCost } from "../utils/cost.js";
 import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 
+function supportsReasoning(model: string): boolean {
+  return /^o[1-9]/.test(model);
+}
+
 export class OpenAIProvider implements LLMProvider {
   readonly name = "openai" as const;
   private client: OpenAI;
@@ -21,6 +25,9 @@ export class OpenAIProvider implements LLMProvider {
       this.client.chat.completions.create({
         model: req.model,
         temperature: req.temperature,
+        ...(req.reasoningEffort && supportsReasoning(req.model)
+          ? { reasoning_effort: req.reasoningEffort }
+          : {}),
         messages: [
           ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
           { role: "user", content: req.prompt },

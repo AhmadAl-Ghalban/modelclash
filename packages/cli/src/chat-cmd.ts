@@ -21,6 +21,12 @@ import {
   parseProviderList,
   filterProviders,
   pickProvidersInteractive,
+  pickModelsInteractive,
+  pickModelInteractive,
+  pickProviderInteractive,
+  pickEffortInteractive,
+  MODELS_WITH_EFFORT,
+  type EffortLevel,
 } from "./select.js";
 import { PROVIDER_COLORS, formatTurnSummary } from "./formatter.js";
 
@@ -58,6 +64,7 @@ interface ChatState {
   selected: ProviderName[];
   providers: LLMProvider[];
   settings: ResolvedSettings;
+  effort: Partial<Record<ProviderName, EffortLevel>>;
   systemPrompt?: string;
   history: ChatMessage[];
   stream: boolean;
@@ -78,9 +85,13 @@ export function buildChatCommand(): Command {
     .option("--timeout <ms>", "Request timeout in ms", (v) => parseInt(v, 10))
     .option("--no-stream", "Disable streaming output")
     .option("-s, --system <prompt>", "System prompt prepended to history")
-    .action(async (opts: ChatCliOptions) => {
+    .action(async function (this: Command, opts: ChatCliOptions) {
       try {
-        await runChat(opts);
+        const parentOpts = (this.parent?.opts() ?? {}) as Partial<ChatCliOptions> & {
+          providers?: string;
+        };
+        const merged: ChatCliOptions = { ...parentOpts, ...opts };
+        await runChat(merged);
       } catch (err) {
         if ((err as { code?: string }).code === "ERR_USE_AFTER_CLOSE") return;
         if ((err as Error).name === "ExitPromptError") return;
@@ -124,11 +135,34 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
 
   if (selected.length === 0) throw new Error("No providers selected.");
 
+  const explicitModel: Partial<Record<ProviderName, boolean>> = {
+    openai: opts.modelOpenai !== undefined,
+    anthropic: opts.modelAnthropic !== undefined,
+    google: opts.modelGoogle !== undefined,
+    groq: opts.modelGroq !== undefined,
+    deepseek: opts.modelDeepseek !== undefined,
+    ollama: opts.modelOllama !== undefined,
+  };
+  const needsPick = selected.some((p) => !explicitModel[p]);
+  const effort: Partial<Record<ProviderName, EffortLevel>> = {};
+  if (needsPick && process.stdin.isTTY) {
+    const picks = await pickModelsInteractive(selected, settings.models, explicitModel);
+    for (const [name, model] of Object.entries(picks)) {
+      if (!model) continue;
+      const p = name as ProviderName;
+      settings.models[p] = model;
+      if (MODELS_WITH_EFFORT[model]) {
+        effort[p] = await pickEffortInteractive(p, model);
+      }
+    }
+  }
+
   const all = buildProvidersFromSettings(settings);
   const state: ChatState = {
     selected,
     providers: filterProviders(all, selected),
     settings,
+    effort,
     systemPrompt: opts.system,
     history: [],
     stream: opts.noStream !== true,
@@ -137,25 +171,17 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
 
   printWelcome(state);
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-  let exited = false;
-  rl.on("close", () => {
-    exited = true;
-  });
-
-  while (!exited) {
+  while (true) {
     let input: string;
     try {
-      input = await readPrompt(rl);
+      input = await readPrompt();
     } catch {
       break;
     }
-    if (exited) break;
     if (input.length === 0) continue;
 
     if (input.startsWith("/")) {
-      const handled = await handleSlash(input, state, rl);
+      const handled = await handleSlash(input, state);
       if (handled === "exit") break;
       if (handled === "handled") continue;
     }
@@ -163,25 +189,220 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
     await runTurn(state, input);
   }
 
-  rl.close();
   printGoodbye(state);
 }
 
-async function readPrompt(rl: ReturnType<typeof createInterface>): Promise<string> {
-  const lines: string[] = [];
-  while (true) {
-    const isContinuation = lines.length > 0;
-    const prompt = isContinuation
-      ? chalk.dim("· ")
-      : chalk.bold.cyan("› ");
-    const line = await rl.question(prompt);
-    if (line.endsWith("\\")) {
-      lines.push(line.slice(0, -1));
-      continue;
-    }
-    lines.push(line);
-    return lines.join("\n").trim();
+const SLASH_COMMANDS: { name: string; desc: string }[] = [
+  { name: "/help", desc: "show command list" },
+  { name: "/model", desc: "switch provider/model (interactive)" },
+  { name: "/effort", desc: "set reasoning effort (low|medium|high)" },
+  { name: "/providers", desc: "list selected providers + models" },
+  { name: "/stream", desc: "toggle streaming on/off" },
+  { name: "/temp", desc: "change sampling temperature" },
+  { name: "/system", desc: "set/clear system prompt" },
+  { name: "/history", desc: "print conversation history" },
+  { name: "/stats", desc: "session totals (tokens, cost)" },
+  { name: "/retry", desc: "re-run the last user message" },
+  { name: "/clear", desc: "clear the screen" },
+  { name: "/reset", desc: "clear conversation history" },
+  { name: "/save", desc: "save transcript (.md or .json)" },
+  { name: "/load", desc: "load conversation from JSON" },
+  { name: "/exit", desc: "leave the chat" },
+];
+
+async function promptLine(message: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(message);
+  } finally {
+    rl.close();
   }
+}
+
+async function readPrompt(): Promise<string> {
+  if (!process.stdin.isTTY) return readPromptLine();
+  return readPromptRaw();
+}
+
+async function readPromptLine(): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const lines: string[] = [];
+  try {
+    while (true) {
+      const isContinuation = lines.length > 0;
+      const prompt = isContinuation ? chalk.dim("· ") : chalk.bold.cyan("› ");
+      const line = await rl.question(prompt);
+      if (line.endsWith("\\")) {
+        lines.push(line.slice(0, -1));
+        continue;
+      }
+      lines.push(line);
+      return lines.join("\n").trim();
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+function readPromptRaw(): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const stdin = process.stdin;
+    const stdout = process.stdout;
+    const promptStr = chalk.bold.cyan("› ");
+    const promptVisibleLen = 2;
+
+    let buffer = "";
+    let menuIdx = 0;
+    let linesBelow = 0;
+
+    const menuOpen = () => buffer.startsWith("/");
+    const filtered = () =>
+      menuOpen()
+        ? SLASH_COMMANDS.filter((c) => c.name.startsWith(buffer.toLowerCase()))
+        : [];
+
+    const eraseBelow = () => {
+      if (linesBelow > 0) {
+        stdout.write(`\x1b[${linesBelow}B`);
+        for (let i = 0; i < linesBelow; i++) {
+          stdout.write("\r\x1b[2K");
+          if (i < linesBelow - 1) stdout.write("\x1b[1A");
+        }
+        stdout.write(`\x1b[${linesBelow - 1}A`);
+      }
+      linesBelow = 0;
+    };
+
+    const render = () => {
+      eraseBelow();
+      stdout.write("\r\x1b[2K" + promptStr + buffer);
+
+      const matches = filtered();
+      if (matches.length === 0) return;
+
+      if (menuIdx >= matches.length) menuIdx = matches.length - 1;
+      if (menuIdx < 0) menuIdx = 0;
+
+      const maxRows = Math.min(matches.length, 8);
+      const lines: string[] = [];
+      const nameWidth = Math.max(...matches.map((m) => m.name.length));
+      for (let i = 0; i < maxRows; i++) {
+        const m = matches[i];
+        const isCur = i === menuIdx;
+        const cursor = isCur ? chalk.cyan("❯ ") : "  ";
+        const name = isCur ? chalk.cyan.bold(m.name) : m.name;
+        const pad = " ".repeat(Math.max(0, nameWidth - m.name.length));
+        lines.push(`${cursor}${name}${pad}  ${chalk.dim(m.desc)}`);
+      }
+      if (matches.length > maxRows) {
+        lines.push(chalk.dim(`  …${matches.length - maxRows} more`));
+      }
+
+      for (const l of lines) {
+        stdout.write("\n" + l);
+      }
+      linesBelow = lines.length;
+
+      stdout.write(`\x1b[${linesBelow}A`);
+      const col = promptVisibleLen + buffer.length + 1;
+      stdout.write(`\r\x1b[${col}G`);
+    };
+
+    const cleanup = () => {
+      eraseBelow();
+      stdin.removeListener("data", onData);
+      if (stdin.isTTY) stdin.setRawMode(false);
+      stdin.pause();
+    };
+
+    const finishLine = (out: string) => {
+      cleanup();
+      stdout.write("\n");
+      resolve(out);
+    };
+
+    const onData = (chunk: Buffer | string) => {
+      const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      for (let i = 0; i < s.length; i++) {
+        const ch = s[i];
+        const code = s.charCodeAt(i);
+
+        if (ch === "\x03") {
+          cleanup();
+          stdout.write("\n");
+          process.exit(130);
+        }
+        if (ch === "\x04") {
+          if (buffer.length === 0) {
+            cleanup();
+            stdout.write("\n");
+            return reject(new Error("EOF"));
+          }
+          continue;
+        }
+        if (ch === "\x1b") {
+          if (i + 2 < s.length && s[i + 1] === "[") {
+            const k = s[i + 2];
+            i += 2;
+            if (menuOpen()) {
+              if (k === "A") {
+                menuIdx = Math.max(0, menuIdx - 1);
+                render();
+                continue;
+              }
+              if (k === "B") {
+                menuIdx = Math.min(filtered().length - 1, menuIdx + 1);
+                render();
+                continue;
+              }
+            }
+            continue;
+          }
+          if (menuOpen()) {
+            buffer = "";
+            menuIdx = 0;
+            render();
+          }
+          continue;
+        }
+        if (ch === "\t") {
+          if (menuOpen()) {
+            const m = filtered()[menuIdx];
+            if (m) {
+              buffer = m.name + " ";
+              render();
+            }
+          }
+          continue;
+        }
+        if (ch === "\r" || ch === "\n") {
+          if (menuOpen()) {
+            const m = filtered()[menuIdx];
+            if (m) {
+              return finishLine(m.name);
+            }
+          }
+          return finishLine(buffer.trim());
+        }
+        if (code === 127 || code === 8) {
+          buffer = buffer.slice(0, -1);
+          menuIdx = 0;
+          render();
+          continue;
+        }
+        if (code < 32) continue;
+        buffer += ch;
+        if (ch === "/" || menuOpen()) menuIdx = 0;
+        render();
+      }
+    };
+
+    if (stdin.isTTY) stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding("utf8");
+    stdout.write(promptStr);
+    stdin.on("data", onData);
+  });
 }
 
 type SlashResult = "handled" | "exit" | "passthrough";
@@ -189,7 +410,6 @@ type SlashResult = "handled" | "exit" | "passthrough";
 async function handleSlash(
   input: string,
   state: ChatState,
-  rl: ReturnType<typeof createInterface>,
 ): Promise<SlashResult> {
   const [cmd, ...rest] = input.split(/\s+/);
   const arg = rest.join(" ").trim();
@@ -214,6 +434,23 @@ async function handleSlash(
       state.history.length = 0;
       console.log(chalk.dim("  ✓ history cleared"));
       return "handled";
+
+    case "/retry": {
+      let lastUser: string | undefined;
+      for (let i = state.history.length - 1; i >= 0; i--) {
+        if (state.history[i].role === "user") {
+          lastUser = state.history[i].content;
+          state.history.splice(i);
+          break;
+        }
+      }
+      if (!lastUser) {
+        console.log(chalk.dim("  nothing to retry"));
+        return "handled";
+      }
+      await runTurn(state, lastUser);
+      return "handled";
+    }
 
     case "/history":
       printHistory(state.history);
@@ -261,16 +498,56 @@ async function handleSlash(
     case "/model": {
       const [providerArg, ...modelParts] = rest;
       const model = modelParts.join(" ").trim();
-      if (!providerArg || !model) {
-        console.log(chalk.dim("  usage: /model <provider> <model-name>"));
+
+      let target: ProviderName;
+      if (providerArg) {
+        if (!ALL_PROVIDERS.includes(providerArg as ProviderName)) {
+          console.log(chalk.red(`  unknown provider: ${providerArg}`));
+          return "handled";
+        }
+        target = providerArg as ProviderName;
+      } else if (state.selected.length === 1) {
+        target = state.selected[0];
+      } else {
+        target = await pickProviderInteractive(state.selected);
+      }
+
+      const picked = model.length > 0
+        ? model
+        : await pickModelInteractive(target, state.settings.models[target]);
+      state.settings.models[target] = picked;
+      console.log(chalk.dim(`  ✓ ${target} model = ${picked}`));
+
+      if (MODELS_WITH_EFFORT[picked]) {
+        const eff = await pickEffortInteractive(
+          target,
+          picked,
+          state.effort[target] ?? "medium",
+        );
+        state.effort[target] = eff;
+        console.log(chalk.dim(`  ✓ ${target} effort = ${eff}`));
+      } else if (state.effort[target]) {
+        delete state.effort[target];
+      }
+      return "handled";
+    }
+
+    case "/effort": {
+      const [providerArg, levelArg] = rest;
+      if (!providerArg || !levelArg) {
+        console.log(chalk.dim("  usage: /effort <provider> <low|medium|high>"));
         return "handled";
       }
       if (!ALL_PROVIDERS.includes(providerArg as ProviderName)) {
         console.log(chalk.red(`  unknown provider: ${providerArg}`));
         return "handled";
       }
-      state.settings.models[providerArg as ProviderName] = model;
-      console.log(chalk.dim(`  ✓ ${providerArg} model = ${model}`));
+      if (!["low", "medium", "high"].includes(levelArg)) {
+        console.log(chalk.red(`  invalid level: ${levelArg}`));
+        return "handled";
+      }
+      state.effort[providerArg as ProviderName] = levelArg as EffortLevel;
+      console.log(chalk.dim(`  ✓ ${providerArg} effort = ${levelArg}`));
       return "handled";
     }
 
@@ -284,9 +561,11 @@ async function handleSlash(
 
       let scope: "full" | "last" = "full";
       if (isMarkdown) {
-        const ans = (await rl.question(
-          chalk.dim("  save full transcript or last response only? [full/last] (full) "),
-        ))
+        const ans = (
+          await promptLine(
+            chalk.dim("  save full transcript or last response only? [full/last] (full) "),
+          )
+        )
           .trim()
           .toLowerCase();
         if (ans === "last" || ans === "l") scope = "last";
@@ -409,6 +688,7 @@ async function runOne(
     model,
     temperature: state.settings.temperature,
     timeoutMs: state.settings.timeoutMs,
+    reasoningEffort: state.effort[provider.name],
   };
 
   try {
@@ -521,7 +801,8 @@ function printHelp(): void {
     ["/stream", "toggle streaming on/off"],
     ["/temp <n>", "change sampling temperature"],
     ["/system <text>", "set system prompt (or 'off' to clear)"],
-    ["/model <provider> <name>", "switch a provider's model"],
+    ["/model [provider] [name]", "switch model (interactive if args omitted)"],
+    ["/effort <provider> <lvl>", "set reasoning effort: low|medium|high"],
     ["/save [path]", "save transcript (.md → markdown, .json → JSON)"],
     ["/load <path>", "load conversation from JSON"],
     ["end line with \\", "multi-line input"],

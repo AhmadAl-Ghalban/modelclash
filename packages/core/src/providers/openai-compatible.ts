@@ -8,6 +8,11 @@ import type {
 import { estimateCost } from "../utils/cost.js";
 import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 
+function supportsReasoning(provider: ProviderName, model: string): boolean {
+  if (provider === "deepseek") return model === "deepseek-reasoner";
+  return false;
+}
+
 export interface OpenAICompatibleOptions {
   name: ProviderName;
   baseURL: string;
@@ -29,6 +34,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       this.client.chat.completions.create({
         model: req.model,
         temperature: req.temperature,
+        ...(req.reasoningEffort && supportsReasoning(this.name, req.model)
+          ? { reasoning_effort: req.reasoningEffort }
+          : {}),
         messages: [
           ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
           { role: "user", content: req.prompt },
