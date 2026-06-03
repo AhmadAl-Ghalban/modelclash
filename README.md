@@ -15,9 +15,14 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 - User config at `~/.modelclash/config.json` (managed via `modelclash config`)
 - Provider selection: `--providers openai,groq` flag or interactive checkbox picker
 - Multi-turn `modelclash chat` REPL with:
-  - **Claude-Code-style slash menu** — type `/` and a live-filtered command list pops up under the prompt (↑/↓ navigate, Enter selects, Tab autocompletes, Esc dismisses, Backspace removes the `/` to hide)
+  - **Claude-Code-style intro** — two-column rounded box with greeting, ASCII logo, current working dir, tips, and the active provider list with reasoning-effort badges
+  - **Boxed input prompt** — `╭─❯ … ─╮` style with persistent status footer (provider chips · stream mode · temperature · `/ for commands`)
+  - **Live slash menu** — type `/` and a filtered command list pops up under the prompt (↑/↓ navigate, Enter selects, Tab autocompletes, Esc dismisses, Backspace deletes the `/` to hide)
+  - **Full line editing** — ← / → / Home / End / Ctrl-A / Ctrl-E cursor movement, Ctrl-W delete word, Ctrl-U clear-left, ↑/↓ walks input history (when menu is closed), bracketed-paste support for multi-line pastes
+  - **Markdown rendering** in assistant replies — bold, italic, inline code, fenced code blocks, headings, bullet lists; each model's answer framed with a colored `┌─ ● provider · model` header and `└─ tokens · cost · time` footer
   - **Interactive model picker** — on startup and via `/model`, pick a provider then a model from a list (or `✎ custom…` to type your own)
   - **Reasoning effort selection** — when you pick an effort-capable model (OpenAI `o1` / `o1-mini`, DeepSeek `deepseek-reasoner`), choose `low` / `medium` / `high` with one-line trade-off descriptions; sent through as `reasoning_effort`
+  - **Auto-save on exit + write permission prompt** — leaving the chat asks if you want to save the transcript (`md` / `json` / `no`), then confirms the path before writing; existing files require explicit overwrite. Default location is `~/modelclash-chats/chat-YYYYMMDD-HHMM.{md,json}` (directory is auto-created). `~/…` paths are expanded.
   - Conversation history, system prompts, session save/load (`.json` or `.md`), mid-chat model swap, `/retry` for the last user message
   - Per-turn comparison table with fastest / cheapest / longest / highest tok/s badges
 - Bundled Docker setup for running Ollama locally
@@ -241,12 +246,27 @@ Type `/` at any prompt and a filtered command list appears under the cursor — 
 | -------------- | ------------------------------------------------------- |
 | `/`            | open the menu (must be the first char of the line)      |
 | type letters   | live-filter (`/mo` → `/model`)                          |
-| ↑ / ↓          | move selection                                          |
+| ↑ / ↓          | move selection (or walk input history when menu closed) |
 | Enter          | run the highlighted command                             |
 | Tab            | autocomplete the highlighted command into the buffer    |
 | Backspace      | delete a char (deleting the leading `/` hides the menu) |
 | Esc            | clear the buffer and hide the menu                      |
 | Ctrl-C         | exit the chat                                           |
+
+### Input editing
+
+The prompt runs in raw mode with full single-line editing:
+
+| Key                       | Action                                          |
+| ------------------------- | ----------------------------------------------- |
+| ← / →                     | move cursor by character                        |
+| Home / End, Ctrl-A / Ctrl-E | jump to start / end                           |
+| Ctrl-W                    | delete previous word                            |
+| Ctrl-U                    | clear text before the cursor                    |
+| Backspace                 | delete the character before the cursor          |
+| ↑ / ↓ (menu closed)       | scroll through previous prompts in this session |
+| Paste                     | bracketed-paste captures multi-line pastes as one insert; embedded newlines flatten to spaces |
+| Ctrl-D                    | EOF — exits if the buffer is empty              |
 
 ### Slash commands
 
@@ -267,8 +287,8 @@ Type `/` at any prompt and a filtered command list appears under the cursor — 
 | `/model <provider>`           | pick model + effort for one provider                                   |
 | `/model <provider> <name>`    | set a model directly (effort prompt only if model supports it)         |
 | `/effort <provider> <lvl>`    | set reasoning effort: `low` / `medium` / `high`                        |
-| `/save [path]`                | save transcript — `.md` for prose, `.json` to round-trip with `/load`  |
-| `/load <path>`                | load conversation from JSON                                            |
+| `/save [path]`                | save transcript — `.md` for prose, `.json` to round-trip with `/load`. Prompts to confirm before writing; `~/…` paths expand. Default location: `~/modelclash-chats/`. |
+| `/load <path>`                | load conversation from JSON (accepts `~/…` paths)                      |
 
 ### Chat flags
 
@@ -282,6 +302,30 @@ Type `/` at any prompt and a filtered command list appears under the cursor — 
 | `--timeout <ms>`            | Request timeout in ms                |
 
 Conversation history is shared across providers — each turn's context includes everyone's prior replies. On exit, a session summary prints (turns, tokens, total cost).
+
+### Saving transcripts & write permission
+
+`/save [path]` and the auto-save prompt on exit both go through the same flow:
+
+1. **Format picker** (auto-save only): `[md/json/no]`. `md` produces a human-readable transcript with provider headings, models, system prompt, and a stats footer. `json` round-trips with `/load`.
+2. **Path prompt** with a default of `~/modelclash-chats/chat-YYYYMMDD-HHMM.{md,json}`. Type your own to override.
+3. **Permission prompt**:
+   - new file → `write to <path>? [Y/n]` (Enter = yes)
+   - existing file → `⚠  file exists — overwrite? [y/N]` (Enter = no, safer default)
+4. Parent directory is auto-created with `mkdir -p`. `~/…` paths expand to your home directory.
+
+Decline → `✗ cancelled — not saved`. Failures show both the system error and the absolute path that was attempted, so you can spot permission or typo issues quickly.
+
+### Markdown rendering
+
+Assistant replies pass through a minimal markdown renderer before display:
+
+- `**bold**`, `*italic*`, `` `inline code` ``
+- Fenced code blocks (```` ``` ````) render inside a cyan box
+- `#`, `##`, `###` headings (bold cyan)
+- `- ` / `* ` bullets become coloured `•`
+
+Each provider's response is also framed: a colored `┌─ ● provider · model` header, a left `│` bar on every line, and a `└─ in↑ out↓ tok · $cost · time` footer. Errors show as `│ ✗ <message>`.
 
 ### Reasoning effort
 
@@ -332,6 +376,9 @@ This README is the contract with anyone running the project. When a PR changes a
 - New/removed/renamed CLI flag → **CLI usage › Flags** or **Chat flags**
 - New/changed slash command → **Chat mode › Slash commands** (and **Live slash menu** if its key bindings change)
 - New reasoning/effort plumbing or model-picker behaviour → **Chat mode › Reasoning effort**
+- Change to the input prompt key bindings → **Chat mode › Input editing**
+- Change to save/load paths, defaults, or the permission prompt → **Chat mode › Saving transcripts & write permission**
+- Change to assistant-side rendering (markdown, message frame) → **Chat mode › Markdown rendering**
 - New/changed npm script → **Running the project**
 - New env var or config field → **Configuration**
 - New provider → **Features**, **Configuration**, **Flags**, free-tier table, project structure

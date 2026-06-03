@@ -1,7 +1,9 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile, mkdir, access } from "node:fs/promises";
+import { homedir } from "node:os";
+import { resolve as resolvePath, dirname, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   loadConfig,
@@ -171,10 +173,12 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
 
   printWelcome(state);
 
+  const history: string[] = [];
+
   while (true) {
     let input: string;
     try {
-      input = await readPrompt();
+      input = await readPrompt(history, state);
     } catch {
       break;
     }
@@ -184,12 +188,104 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
       const handled = await handleSlash(input, state);
       if (handled === "exit") break;
       if (handled === "handled") continue;
+    } else {
+      history.push(input);
     }
 
-    await runTurn(state, input);
+    if (!input.startsWith("/")) await runTurn(state, input);
   }
 
+  await maybeAutoSave(state);
   printGoodbye(state);
+}
+
+async function maybeAutoSave(state: ChatState): Promise<void> {
+  if (state.history.length === 0) return;
+  if (!process.stdin.isTTY) return;
+
+  console.log();
+  const ans = (
+    await promptLine(
+      chalk.cyan("  save transcript before leaving? ") +
+        chalk.dim("[md/json/no] (md) "),
+    )
+  )
+    .trim()
+    .toLowerCase();
+
+  if (ans === "no" || ans === "n") return;
+
+  const format: "md" | "json" = ans === "json" || ans === "j" ? "json" : "md";
+  const defaultPath = defaultSavePath(format);
+
+  const typedPath = (
+    await promptLine(chalk.cyan("  path: ") + chalk.dim(`(${defaultPath}) `))
+  ).trim();
+  const outPath = resolveUserPath(typedPath.length > 0 ? typedPath : defaultPath);
+
+  if (!(await confirmWrite(outPath))) {
+    console.log(chalk.dim("  ✗ cancelled — not saved"));
+    return;
+  }
+
+  try {
+    await mkdir(dirname(outPath), { recursive: true });
+    if (format === "md") {
+      const md = renderMarkdown(state, "full");
+      await writeFile(outPath, md, "utf8");
+    } else {
+      const payload = {
+        savedAt: new Date().toISOString(),
+        providers: state.selected,
+        models: Object.fromEntries(
+          state.selected.map((p) => [p, state.settings.models[p]]),
+        ),
+        systemPrompt: state.systemPrompt,
+        history: state.history,
+        stats: state.stats,
+      };
+      await writeFile(outPath, JSON.stringify(payload, null, 2), "utf8");
+    }
+    console.log(chalk.dim(`  ✓ saved → ${outPath}`));
+  } catch (err) {
+    console.log(chalk.red(`  ✗ save failed: ${(err as Error).message}`));
+    console.log(chalk.dim(`    tried path: ${outPath}`));
+  }
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function confirmWrite(path: string): Promise<boolean> {
+  const exists = await pathExists(path);
+  const label = exists
+    ? chalk.yellow("  ⚠  file exists — overwrite? ") + chalk.dim("[y/N] ")
+    : chalk.cyan(`  write to `) + chalk.bold(path) + chalk.cyan(`? `) + chalk.dim("[Y/n] ");
+  const ans = (await promptLine(label)).trim().toLowerCase();
+  if (exists) return ans === "y" || ans === "yes";
+  return ans !== "n" && ans !== "no";
+}
+
+function resolveUserPath(p: string): string {
+  let s = p.trim();
+  if (s.startsWith("~/") || s === "~") {
+    s = join(homedir(), s.slice(1) || "/");
+  }
+  return isAbsolute(s) ? s : resolvePath(process.cwd(), s);
+}
+
+function defaultSavePath(format: "md" | "json"): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const dir = join(homedir(), "modelclash-chats");
+  return join(dir, `chat-${stamp}.${format}`);
 }
 
 const SLASH_COMMANDS: { name: string; desc: string }[] = [
@@ -219,9 +315,12 @@ async function promptLine(message: string): Promise<string> {
   }
 }
 
-async function readPrompt(): Promise<string> {
+async function readPrompt(
+  history: string[] = [],
+  state?: ChatState,
+): Promise<string> {
   if (!process.stdin.isTTY) return readPromptLine();
-  return readPromptRaw();
+  return readPromptRaw(history, state);
 }
 
 async function readPromptLine(): Promise<string> {
@@ -244,16 +343,22 @@ async function readPromptLine(): Promise<string> {
   }
 }
 
-function readPromptRaw(): Promise<string> {
+function readPromptRaw(history: string[], state?: ChatState): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const stdin = process.stdin;
     const stdout = process.stdout;
-    const promptStr = chalk.bold.cyan("› ");
-    const promptVisibleLen = 2;
+
+    const width = () => Math.min(process.stdout.columns ?? 80, 80);
 
     let buffer = "";
+    let cursor = 0;
     let menuIdx = 0;
-    let linesBelow = 0;
+    let lastRows = 0;
+    let inputRowOffset = 0;
+    let histIdx = history.length;
+    let savedBuffer = "";
+    let inPaste = false;
+    let pasteBuf = "";
 
     const menuOpen = () => buffer.startsWith("/");
     const filtered = () =>
@@ -261,71 +366,151 @@ function readPromptRaw(): Promise<string> {
         ? SLASH_COMMANDS.filter((c) => c.name.startsWith(buffer.toLowerCase()))
         : [];
 
-    const eraseBelow = () => {
-      if (linesBelow > 0) {
-        stdout.write(`\x1b[${linesBelow}B`);
-        for (let i = 0; i < linesBelow; i++) {
-          stdout.write("\r\x1b[2K");
-          if (i < linesBelow - 1) stdout.write("\x1b[1A");
-        }
-        stdout.write(`\x1b[${linesBelow - 1}A`);
-      }
-      linesBelow = 0;
-    };
+    const moveUp = (n: number) => n > 0 && stdout.write(`\x1b[${n}A`);
 
-    const render = () => {
-      eraseBelow();
-      stdout.write("\r\x1b[2K" + promptStr + buffer);
+    const buildFrame = (): { lines: string[]; inputRow: number; cursorCol: number } => {
+      const w = width();
+      const innerW = w - 4;
+      const visBuf =
+        buffer.length > innerW - 2 ? buffer.slice(-(innerW - 2)) : buffer;
+      const visCursor = Math.min(cursor, visBuf.length);
+      const padLen = Math.max(0, innerW - 2 - visBuf.length);
+
+      const lines: string[] = [];
+      if (state) {
+        const chips = state.selected
+          .map((p) => `${PROVIDER_COLORS[p]("●")} ${chalk.dim(p)}`)
+          .join("  ");
+        lines.push(
+          `  ${chips}  ${chalk.dim("·")}  ${chalk.dim(state.stream ? "stream" : "buffered")}  ${chalk.dim("·")}  ${chalk.dim(`temp ${state.settings.temperature}`)}  ${chalk.dim("·")}  ${chalk.dim("/ for commands")}`,
+        );
+      }
+      lines.push(chalk.cyan("╭" + "─".repeat(w - 2) + "╮"));
+      const inputRow = lines.length;
+      lines.push(
+        chalk.cyan("│ ") +
+          chalk.cyan.bold("❯ ") +
+          visBuf +
+          " ".repeat(padLen) +
+          chalk.cyan(" │"),
+      );
+      lines.push(chalk.cyan("╰" + "─".repeat(w - 2) + "╯"));
 
       const matches = filtered();
-      if (matches.length === 0) return;
-
-      if (menuIdx >= matches.length) menuIdx = matches.length - 1;
-      if (menuIdx < 0) menuIdx = 0;
-
-      const maxRows = Math.min(matches.length, 8);
-      const lines: string[] = [];
-      const nameWidth = Math.max(...matches.map((m) => m.name.length));
-      for (let i = 0; i < maxRows; i++) {
-        const m = matches[i];
-        const isCur = i === menuIdx;
-        const cursor = isCur ? chalk.cyan("❯ ") : "  ";
-        const name = isCur ? chalk.cyan.bold(m.name) : m.name;
-        const pad = " ".repeat(Math.max(0, nameWidth - m.name.length));
-        lines.push(`${cursor}${name}${pad}  ${chalk.dim(m.desc)}`);
+      if (matches.length > 0) {
+        if (menuIdx >= matches.length) menuIdx = matches.length - 1;
+        if (menuIdx < 0) menuIdx = 0;
+        const maxRows = Math.min(matches.length, 8);
+        const nameWidth = Math.max(...matches.map((m) => m.name.length));
+        for (let i = 0; i < maxRows; i++) {
+          const m = matches[i];
+          const isCur = i === menuIdx;
+          const arrow = isCur ? chalk.cyan("❯") : " ";
+          const name = isCur ? chalk.cyan.bold(m.name) : m.name;
+          const pad = " ".repeat(Math.max(0, nameWidth - m.name.length));
+          lines.push(`  ${arrow} ${name}${pad}  ${chalk.dim(m.desc)}`);
+        }
+        if (matches.length > maxRows) {
+          lines.push(chalk.dim(`    …${matches.length - maxRows} more`));
+        }
+        lines.push(
+          "  " +
+            chalk.dim("↑↓ navigate · ⏎ run · tab complete · esc close"),
+        );
       }
-      if (matches.length > maxRows) {
-        lines.push(chalk.dim(`  …${matches.length - maxRows} more`));
-      }
 
-      for (const l of lines) {
-        stdout.write("\n" + l);
-      }
-      linesBelow = lines.length;
+      const cursorCol = 2 + 2 + visCursor + 1;
+      return { lines, inputRow, cursorCol };
+    };
 
-      stdout.write(`\x1b[${linesBelow}A`);
-      const col = promptVisibleLen + buffer.length + 1;
-      stdout.write(`\r\x1b[${col}G`);
+    let firstRender = true;
+
+    const render = () => {
+      if (!firstRender) {
+        moveUp(inputRowOffset);
+        stdout.write("\r");
+      }
+      firstRender = false;
+
+      const { lines, inputRow, cursorCol } = buildFrame();
+      const totalRows = lines.length;
+
+      for (let i = 0; i < totalRows; i++) {
+        stdout.write(lines[i] + "\x1b[K");
+        if (i < totalRows - 1) stdout.write("\n");
+      }
+      for (let i = totalRows; i < lastRows; i++) {
+        stdout.write("\n\x1b[K");
+      }
+      const trailingClears = Math.max(0, lastRows - totalRows);
+      moveUp(trailingClears);
+
+      const fromBottom = totalRows - 1 - inputRow;
+      moveUp(fromBottom);
+      stdout.write(`\r\x1b[${cursorCol}G`);
+
+      lastRows = totalRows;
+      inputRowOffset = inputRow;
     };
 
     const cleanup = () => {
-      eraseBelow();
+      moveUp(inputRowOffset);
+      stdout.write("\r");
+      for (let i = 0; i < lastRows; i++) {
+        stdout.write("\x1b[K");
+        if (i < lastRows - 1) stdout.write("\n");
+      }
+      moveUp(lastRows - 1);
+      stdout.write("\r");
+      if (stdin.isTTY) {
+        stdout.write("\x1b[?2004l");
+        stdin.setRawMode(false);
+      }
       stdin.removeListener("data", onData);
-      if (stdin.isTTY) stdin.setRawMode(false);
       stdin.pause();
     };
 
     const finishLine = (out: string) => {
       cleanup();
-      stdout.write("\n");
+      stdout.write(`${chalk.cyan("›")} ${out}\n`);
       resolve(out);
+    };
+
+    const insert = (txt: string) => {
+      buffer = buffer.slice(0, cursor) + txt + buffer.slice(cursor);
+      cursor += txt.length;
     };
 
     const onData = (chunk: Buffer | string) => {
       const s = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+
+      if (inPaste) {
+        const endIdx = s.indexOf("\x1b[201~");
+        if (endIdx === -1) {
+          pasteBuf += s;
+          return;
+        }
+        pasteBuf += s.slice(0, endIdx);
+        inPaste = false;
+        insert(pasteBuf.replace(/\r?\n/g, " "));
+        pasteBuf = "";
+        render();
+        const remainder = s.slice(endIdx + 6);
+        if (remainder.length > 0) onData(remainder);
+        return;
+      }
+
       for (let i = 0; i < s.length; i++) {
         const ch = s[i];
         const code = s.charCodeAt(i);
+
+        if (s.startsWith("\x1b[200~", i)) {
+          inPaste = true;
+          pasteBuf = "";
+          const tail = s.slice(i + 6);
+          if (tail.length > 0) onData(tail);
+          return;
+        }
 
         if (ch === "\x03") {
           cleanup();
@@ -340,26 +525,91 @@ function readPromptRaw(): Promise<string> {
           }
           continue;
         }
+        if (ch === "\x17") {
+          const left = buffer.slice(0, cursor).replace(/\S*\s*$/, "");
+          buffer = left + buffer.slice(cursor);
+          cursor = left.length;
+          render();
+          continue;
+        }
+        if (ch === "\x15") {
+          buffer = buffer.slice(cursor);
+          cursor = 0;
+          render();
+          continue;
+        }
+        if (ch === "\x01") {
+          cursor = 0;
+          render();
+          continue;
+        }
+        if (ch === "\x05") {
+          cursor = buffer.length;
+          render();
+          continue;
+        }
         if (ch === "\x1b") {
           if (i + 2 < s.length && s[i + 1] === "[") {
             const k = s[i + 2];
+            if ((k >= "0" && k <= "9") && i + 3 < s.length) {
+              const k2 = s[i + 3];
+              i += 3;
+              if (k === "1" && (k2 === "~" || k2 === "H")) cursor = 0;
+              if (k === "4" && k2 === "~") cursor = buffer.length;
+              render();
+              continue;
+            }
             i += 2;
-            if (menuOpen()) {
-              if (k === "A") {
+            if (k === "A") {
+              if (menuOpen()) {
                 menuIdx = Math.max(0, menuIdx - 1);
                 render();
-                continue;
+              } else if (history.length > 0) {
+                if (histIdx === history.length) savedBuffer = buffer;
+                histIdx = Math.max(0, histIdx - 1);
+                buffer = history[histIdx] ?? "";
+                cursor = buffer.length;
+                render();
               }
-              if (k === "B") {
+              continue;
+            }
+            if (k === "B") {
+              if (menuOpen()) {
                 menuIdx = Math.min(filtered().length - 1, menuIdx + 1);
                 render();
-                continue;
+              } else if (histIdx < history.length) {
+                histIdx++;
+                buffer = histIdx === history.length ? savedBuffer : history[histIdx];
+                cursor = buffer.length;
+                render();
               }
+              continue;
+            }
+            if (k === "C") {
+              cursor = Math.min(buffer.length, cursor + 1);
+              render();
+              continue;
+            }
+            if (k === "D") {
+              cursor = Math.max(0, cursor - 1);
+              render();
+              continue;
+            }
+            if (k === "H") {
+              cursor = 0;
+              render();
+              continue;
+            }
+            if (k === "F") {
+              cursor = buffer.length;
+              render();
+              continue;
             }
             continue;
           }
           if (menuOpen()) {
             buffer = "";
+            cursor = 0;
             menuIdx = 0;
             render();
           }
@@ -370,6 +620,7 @@ function readPromptRaw(): Promise<string> {
             const m = filtered()[menuIdx];
             if (m) {
               buffer = m.name + " ";
+              cursor = buffer.length;
               render();
             }
           }
@@ -378,29 +629,33 @@ function readPromptRaw(): Promise<string> {
         if (ch === "\r" || ch === "\n") {
           if (menuOpen()) {
             const m = filtered()[menuIdx];
-            if (m) {
-              return finishLine(m.name);
-            }
+            if (m) return finishLine(m.name);
           }
           return finishLine(buffer.trim());
         }
         if (code === 127 || code === 8) {
-          buffer = buffer.slice(0, -1);
-          menuIdx = 0;
-          render();
+          if (cursor > 0) {
+            buffer = buffer.slice(0, cursor - 1) + buffer.slice(cursor);
+            cursor--;
+            menuIdx = 0;
+            render();
+          }
           continue;
         }
         if (code < 32) continue;
-        buffer += ch;
+        insert(ch);
         if (ch === "/" || menuOpen()) menuIdx = 0;
         render();
       }
     };
 
-    if (stdin.isTTY) stdin.setRawMode(true);
+    if (stdin.isTTY) {
+      stdin.setRawMode(true);
+      stdout.write("\x1b[?2004h");
+    }
     stdin.resume();
     stdin.setEncoding("utf8");
-    stdout.write(promptStr);
+    render();
     stdin.on("data", onData);
   });
 }
@@ -472,7 +727,15 @@ async function handleSlash(
 
     case "/temp":
     case "/temperature": {
-      const n = Number.parseFloat(arg);
+      let n = Number.parseFloat(arg);
+      if (Number.isNaN(n)) {
+        const typed = (
+          await promptLine(
+            chalk.dim(`  temperature (current ${state.settings.temperature}): `),
+          )
+        ).trim();
+        n = Number.parseFloat(typed);
+      }
       if (Number.isNaN(n)) {
         console.log(chalk.dim(`  temperature = ${state.settings.temperature}`));
       } else {
@@ -483,13 +746,23 @@ async function handleSlash(
     }
 
     case "/system": {
-      if (arg.length === 0) {
+      let value = arg;
+      if (value.length === 0) {
+        value = (
+          await promptLine(
+            chalk.dim(
+              `  system prompt (current ${state.systemPrompt ?? "(none)"}, blank to keep, "off" to clear): `,
+            ),
+          )
+        ).trim();
+      }
+      if (value.length === 0) {
         console.log(chalk.dim(`  system = ${state.systemPrompt ?? "(none)"}`));
-      } else if (arg === "off" || arg === "none") {
+      } else if (value === "off" || value === "none") {
         state.systemPrompt = undefined;
         console.log(chalk.dim(`  ✓ system prompt cleared`));
       } else {
-        state.systemPrompt = arg;
+        state.systemPrompt = value;
         console.log(chalk.dim(`  ✓ system prompt set`));
       }
       return "handled";
@@ -556,8 +829,9 @@ async function handleSlash(
         console.log(chalk.dim("  nothing to save (history is empty)"));
         return "handled";
       }
-      const path = arg || defaultMarkdownPath();
-      const isMarkdown = path.toLowerCase().endsWith(".md");
+      const rawPath = arg || defaultSavePath("md");
+      const outPath = resolveUserPath(rawPath);
+      const isMarkdown = outPath.toLowerCase().endsWith(".md");
 
       let scope: "full" | "last" = "full";
       if (isMarkdown) {
@@ -571,23 +845,34 @@ async function handleSlash(
         if (ans === "last" || ans === "l") scope = "last";
       }
 
-      if (isMarkdown) {
-        const md = renderMarkdown(state, scope);
-        await writeFile(path, md, "utf8");
-      } else {
-        const payload = {
-          savedAt: new Date().toISOString(),
-          providers: state.selected,
-          models: Object.fromEntries(
-            state.selected.map((p) => [p, state.settings.models[p]]),
-          ),
-          systemPrompt: state.systemPrompt,
-          history: state.history,
-          stats: state.stats,
-        };
-        await writeFile(path, JSON.stringify(payload, null, 2), "utf8");
+      if (!(await confirmWrite(outPath))) {
+        console.log(chalk.dim("  ✗ cancelled — not saved"));
+        return "handled";
       }
-      console.log(chalk.dim(`  ✓ saved → ${path}`));
+
+      try {
+        await mkdir(dirname(outPath), { recursive: true });
+        if (isMarkdown) {
+          const md = renderMarkdown(state, scope);
+          await writeFile(outPath, md, "utf8");
+        } else {
+          const payload = {
+            savedAt: new Date().toISOString(),
+            providers: state.selected,
+            models: Object.fromEntries(
+              state.selected.map((p) => [p, state.settings.models[p]]),
+            ),
+            systemPrompt: state.systemPrompt,
+            history: state.history,
+            stats: state.stats,
+          };
+          await writeFile(outPath, JSON.stringify(payload, null, 2), "utf8");
+        }
+        console.log(chalk.dim(`  ✓ saved → ${outPath}`));
+      } catch (err) {
+        console.log(chalk.red(`  ✗ save failed: ${(err as Error).message}`));
+        console.log(chalk.dim(`    tried path: ${outPath}`));
+      }
       return "handled";
     }
 
@@ -596,11 +881,17 @@ async function handleSlash(
         console.log(chalk.dim("  usage: /load <path>"));
         return "handled";
       }
-      const raw = await readFile(arg, "utf8");
-      const data = JSON.parse(raw) as { history?: ChatMessage[]; systemPrompt?: string };
-      state.history = data.history ?? [];
-      if (data.systemPrompt) state.systemPrompt = data.systemPrompt;
-      console.log(chalk.dim(`  ✓ loaded ${state.history.length} message(s) ← ${arg}`));
+      const loadPath = resolveUserPath(arg);
+      try {
+        const raw = await readFile(loadPath, "utf8");
+        const data = JSON.parse(raw) as { history?: ChatMessage[]; systemPrompt?: string };
+        state.history = data.history ?? [];
+        if (data.systemPrompt) state.systemPrompt = data.systemPrompt;
+        console.log(chalk.dim(`  ✓ loaded ${state.history.length} message(s) ← ${loadPath}`));
+      } catch (err) {
+        console.log(chalk.red(`  ✗ load failed: ${(err as Error).message}`));
+        console.log(chalk.dim(`    tried path: ${loadPath}`));
+      }
       return "handled";
     }
 
@@ -691,30 +982,37 @@ async function runOne(
     reasoningEffort: state.effort[provider.name],
   };
 
+  const bar = color("│ ");
   try {
     if (state.stream && provider.streamGenerate) {
       let first = true;
       const res = await provider.streamGenerate(req, (chunk) => {
         if (first) {
-          process.stdout.write("  ");
+          process.stdout.write(bar);
           first = false;
         }
-        process.stdout.write(chunk.replace(/\n/g, "\n  "));
+        process.stdout.write(chunk.replace(/\n/g, `\n${bar}`));
       });
       process.stdout.write("\n");
-      printFooter(res, Date.now() - start);
+      console.log();
+      const rendered = formatMarkdown(res.text);
+      if (rendered !== res.text) {
+        process.stdout.write("\x1b[2K\r");
+      }
+      printFooter(res, Date.now() - start, color);
       return { ok: true, value: res };
     }
 
     const spinner = ora({
       text: chalk.dim(`  thinking…`),
       spinner: "dots",
+      color: "cyan",
     }).start();
     try {
       const res = await provider.generate(req);
       spinner.stop();
-      console.log(indent(res.text));
-      printFooter(res, Date.now() - start);
+      console.log(indentWithBar(formatMarkdown(res.text), color));
+      printFooter(res, Date.now() - start, color);
       return { ok: true, value: res };
     } catch (err) {
       spinner.stop();
@@ -722,7 +1020,7 @@ async function runOne(
     }
   } catch (err) {
     const message = (err as Error).message;
-    console.log(chalk.red(`  ✗ ${message}\n`));
+    console.log(`${color("│")} ${chalk.red("✗ " + message)}\n`);
     return {
       ok: false,
       error: {
@@ -740,41 +1038,166 @@ function printProviderHeader(
   model: string,
   color: (s: string) => string,
 ): void {
-  const label = `${color("●")} ${color.call(chalk, name)} ${chalk.dim(`· ${model}`)}`;
-  console.log(`  ${label}`);
+  const label = `${color("●")} ${color.call(chalk, chalk.bold(name))} ${chalk.dim(`· ${model}`)}`;
+  console.log();
+  console.log(`${color("┌─")} ${label}`);
 }
 
-function printFooter(res: ProviderResponse, durationMs: number): void {
+function printFooter(
+  res: ProviderResponse,
+  durationMs: number,
+  color: (s: string) => string,
+): void {
   const parts = [
     `${res.usage.input}↑ ${res.usage.output}↓ tok`,
     formatCost(res.costUsd),
     `${(durationMs / 1000).toFixed(2)}s`,
   ];
-  console.log(chalk.dim(`  ↳ ${parts.join("  ·  ")}\n`));
+  console.log(`${color("└─")} ${chalk.dim(parts.join("  ·  "))}`);
+}
+
+function indentWithBar(text: string, color: (s: string) => string): string {
+  const bar = color("│ ");
+  return text
+    .split("\n")
+    .map((l) => bar + l)
+    .join("\n");
+}
+
+function formatMarkdown(text: string): string {
+  let out = text;
+  out = out.replace(/```([a-zA-Z0-9_+-]*)\n([\s\S]*?)```/g, (_m, _lang, body) => {
+    const lines = body.replace(/\n$/, "").split("\n");
+    const max = Math.max(...lines.map((l: string) => l.length));
+    const top = chalk.dim("┌" + "─".repeat(Math.min(max + 2, 78)) + "┐");
+    const bot = chalk.dim("└" + "─".repeat(Math.min(max + 2, 78)) + "┘");
+    const body2 = lines.map((l: string) => chalk.dim("│ ") + chalk.cyan(l)).join("\n");
+    return `${top}\n${body2}\n${bot}`;
+  });
+  out = out.replace(/`([^`\n]+)`/g, (_m, code) => chalk.cyan(code));
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, (_m, s) => chalk.bold(s));
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, (_m, pre, s) => `${pre}${chalk.italic(s)}`);
+  out = out.replace(/^(#{1,3})\s+(.*)$/gm, (_m, hashes, title) =>
+    chalk.bold.cyan(title) + chalk.dim(` ${"·".repeat(hashes.length)}`),
+  );
+  out = out.replace(/^\s*[-*]\s+/gm, chalk.cyan("• "));
+  return out;
 }
 
 function printWelcome(state: ChatState): void {
-  const width = 64;
-  const top = "╭" + "─".repeat(width - 2) + "╮";
-  const bot = "╰" + "─".repeat(width - 2) + "╯";
-  const pad = (s: string, visibleLen: number) =>
-    "│  " + s + " ".repeat(Math.max(0, width - 4 - visibleLen)) + "│";
+  const cols = process.stdout.columns ?? 100;
+  const w = Math.max(80, Math.min(cols, 140));
+  const leftW = 44;
+  const rightW = w - leftW - 5;
+  const sep = chalk.cyan("│");
 
-  console.log();
-  console.log(chalk.cyan(top));
-  console.log(chalk.cyan(pad(chalk.bold("⚔  modelclash chat"), 19)));
-  console.log(chalk.cyan(pad("", 0)));
+  const user = process.env.USER ?? process.env.USERNAME ?? "there";
+  const greet = `Welcome back ${user}!`;
+
+  const logo = [
+    "    ▐▛███▜▌    ",
+    "   ▝▜█████▛▘   ",
+    "     ▘▘ ▝▝     ",
+  ];
+
+  const left: string[] = [];
+  left.push(centerVisible(chalk.bold(greet), leftW, greet.length));
+  left.push("");
+  for (const ln of logo) left.push(centerVisible(chalk.cyan(ln), leftW, ln.length));
+  left.push("");
+  const brand = "⚔  modelclash · multi-LLM chat";
+  left.push(centerVisible(chalk.cyan(brand), leftW, brand.length));
+  const cwd = process.cwd();
+  const cwdShort = cwd.length > leftW - 4 ? "…" + cwd.slice(-(leftW - 5)) : cwd;
+  left.push(centerVisible(chalk.dim(cwdShort), leftW, cwdShort.length));
+
+  const right: string[] = [];
+  right.push(chalk.bold("Tips for getting started"));
+  right.push(
+    truncateVisible(
+      chalk.dim("Type ") + chalk.cyan("/") + chalk.dim(" to see the full command menu"),
+      rightW,
+    ),
+  );
+  right.push(
+    truncateVisible(
+      chalk.dim("Use ") + chalk.cyan("/model") + chalk.dim(" to switch model + reasoning effort"),
+      rightW,
+    ),
+  );
+  right.push(
+    truncateVisible(
+      chalk.dim("Press ") + chalk.cyan("↑/↓") + chalk.dim(" to walk through input history"),
+      rightW,
+    ),
+  );
+  right.push(chalk.dim("─".repeat(rightW - 2)));
+  right.push(chalk.bold("Active providers"));
   for (const name of state.selected) {
     const color = PROVIDER_COLORS[name];
     const model = state.settings.models[name];
-    const visible = `●  ${name}  ${model}`;
-    const styled = `${color("●")}  ${color(name)}  ${chalk.dim(model)}`;
-    console.log(chalk.cyan(pad(styled, visible.length)));
+    const eff = state.effort[name] ? chalk.dim(` · effort ${state.effort[name]}`) : "";
+    const text = `${color("●")} ${color(name)} ${chalk.dim("· " + model)}${eff}`;
+    const visLen = 2 + name.length + 3 + model.length + (state.effort[name] ? 10 + (state.effort[name] ?? "").length : 0);
+    right.push(padVisible(text, rightW, visLen));
   }
-  console.log(chalk.cyan(pad("", 0)));
-  const hint = `${state.stream ? "streaming" : "non-streaming"}  ·  temp ${state.settings.temperature}  ·  /help`;
-  console.log(chalk.cyan(pad(chalk.dim(hint), hint.length)));
-  console.log(chalk.cyan(bot));
+
+  const top = chalk.cyan("╭─── modelclash " + "─".repeat(w - 16) + "╮");
+  const bot = chalk.cyan("╰" + "─".repeat(w - 2) + "╯");
+
+  const rows = Math.max(left.length, right.length);
+
+  console.log();
+  console.log(top);
+  for (let i = 0; i < rows; i++) {
+    const L = left[i] ?? " ".repeat(leftW);
+    const R = right[i] ?? " ".repeat(rightW);
+    console.log(`${sep} ${padVisibleRaw(L, leftW)} ${sep} ${padVisibleRaw(R, rightW)} ${sep}`);
+  }
+  console.log(bot);
+
+  const hr = chalk.dim("─".repeat(w));
+  console.log(hr);
+  const placeholder = chalk.dim('Try "What can these models do for me?"');
+  console.log(`${chalk.cyan("❯")} ${placeholder}`);
+  console.log(hr);
+  console.log(
+    "  " +
+      chalk.dim("/ ") +
+      chalk.dim("commands · ") +
+      chalk.dim("↑↓ ") +
+      chalk.dim("history · ") +
+      chalk.dim("esc ") +
+      chalk.dim("clear · ") +
+      chalk.dim("ctrl-c ") +
+      chalk.dim("exit"),
+  );
+  console.log();
+}
+
+function stripAnsiLen(s: string): number {
+  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+function padVisibleRaw(s: string, width: number): string {
+  const len = stripAnsiLen(s);
+  return len >= width ? s : s + " ".repeat(width - len);
+}
+
+function padVisible(s: string, width: number, visLen: number): string {
+  return visLen >= width ? s : s + " ".repeat(width - visLen);
+}
+
+function centerVisible(s: string, width: number, visLen: number): string {
+  if (visLen >= width) return s;
+  const pad = Math.floor((width - visLen) / 2);
+  return " ".repeat(pad) + s + " ".repeat(width - visLen - pad);
+}
+
+function truncateVisible(s: string, width: number): string {
+  const len = stripAnsiLen(s);
+  if (len <= width) return padVisibleRaw(s, width);
+  return s.slice(0, width - 1) + chalk.dim("…");
 }
 
 function printGoodbye(state: ChatState): void {
@@ -859,13 +1282,6 @@ function printHistory(history: ChatMessage[]): void {
   }
 }
 
-function defaultMarkdownPath(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
-  return `chat-${stamp}.md`;
-}
-
 function renderMarkdown(state: ChatState, scope: "full" | "last"): string {
   const lines: string[] = [];
   lines.push(`# modelclash chat`);
@@ -913,13 +1329,6 @@ function lastExchange(history: ChatMessage[]): ChatMessage[] {
     if (history[i].role === "user") break;
   }
   return out;
-}
-
-function indent(text: string): string {
-  return text
-    .split("\n")
-    .map((l) => "  " + l)
-    .join("\n");
 }
 
 function indentBlock(text: string, spaces: number): string {
