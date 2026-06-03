@@ -155,7 +155,7 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
     if (input.length === 0) continue;
 
     if (input.startsWith("/")) {
-      const handled = await handleSlash(input, state);
+      const handled = await handleSlash(input, state, rl);
       if (handled === "exit") break;
       if (handled === "handled") continue;
     }
@@ -186,7 +186,11 @@ async function readPrompt(rl: ReturnType<typeof createInterface>): Promise<strin
 
 type SlashResult = "handled" | "exit" | "passthrough";
 
-async function handleSlash(input: string, state: ChatState): Promise<SlashResult> {
+async function handleSlash(
+  input: string,
+  state: ChatState,
+  rl: ReturnType<typeof createInterface>,
+): Promise<SlashResult> {
   const [cmd, ...rest] = input.split(/\s+/);
   const arg = rest.join(" ").trim();
 
@@ -271,22 +275,40 @@ async function handleSlash(input: string, state: ChatState): Promise<SlashResult
     }
 
     case "/save": {
-      if (!arg) {
-        console.log(chalk.dim("  usage: /save <path>"));
+      if (state.history.length === 0) {
+        console.log(chalk.dim("  nothing to save (history is empty)"));
         return "handled";
       }
-      const payload = {
-        savedAt: new Date().toISOString(),
-        providers: state.selected,
-        models: Object.fromEntries(
-          state.selected.map((p) => [p, state.settings.models[p]]),
-        ),
-        systemPrompt: state.systemPrompt,
-        history: state.history,
-        stats: state.stats,
-      };
-      await writeFile(arg, JSON.stringify(payload, null, 2), "utf8");
-      console.log(chalk.dim(`  ✓ saved → ${arg}`));
+      const path = arg || defaultMarkdownPath();
+      const isMarkdown = path.toLowerCase().endsWith(".md");
+
+      let scope: "full" | "last" = "full";
+      if (isMarkdown) {
+        const ans = (await rl.question(
+          chalk.dim("  save full transcript or last response only? [full/last] (full) "),
+        ))
+          .trim()
+          .toLowerCase();
+        if (ans === "last" || ans === "l") scope = "last";
+      }
+
+      if (isMarkdown) {
+        const md = renderMarkdown(state, scope);
+        await writeFile(path, md, "utf8");
+      } else {
+        const payload = {
+          savedAt: new Date().toISOString(),
+          providers: state.selected,
+          models: Object.fromEntries(
+            state.selected.map((p) => [p, state.settings.models[p]]),
+          ),
+          systemPrompt: state.systemPrompt,
+          history: state.history,
+          stats: state.stats,
+        };
+        await writeFile(path, JSON.stringify(payload, null, 2), "utf8");
+      }
+      console.log(chalk.dim(`  ✓ saved → ${path}`));
       return "handled";
     }
 
@@ -500,7 +522,7 @@ function printHelp(): void {
     ["/temp <n>", "change sampling temperature"],
     ["/system <text>", "set system prompt (or 'off' to clear)"],
     ["/model <provider> <name>", "switch a provider's model"],
-    ["/save <path>", "save conversation to JSON"],
+    ["/save [path]", "save transcript (.md → markdown, .json → JSON)"],
     ["/load <path>", "load conversation from JSON"],
     ["end line with \\", "multi-line input"],
   ];
@@ -554,6 +576,62 @@ function printHistory(history: ChatMessage[]): void {
     const body = m.content.split("\n").join("\n         ");
     console.log(`  ${tag}: ${body}`);
   }
+}
+
+function defaultMarkdownPath(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  return `chat-${stamp}.md`;
+}
+
+function renderMarkdown(state: ChatState, scope: "full" | "last"): string {
+  const lines: string[] = [];
+  lines.push(`# modelclash chat`);
+  lines.push(``);
+  lines.push(`*Saved ${new Date().toISOString()}*`);
+  lines.push(``);
+  const providerList = state.selected
+    .map((p) => `\`${p}\` (${state.settings.models[p]})`)
+    .join(", ");
+  lines.push(`**Providers:** ${providerList}`);
+  if (state.systemPrompt) {
+    lines.push(``);
+    lines.push(`**System prompt:**`);
+    lines.push(``);
+    lines.push("> " + state.systemPrompt.split("\n").join("\n> "));
+  }
+  lines.push(``);
+  lines.push(`---`);
+  lines.push(``);
+
+  const messages =
+    scope === "last" ? lastExchange(state.history) : state.history;
+  for (const m of messages) {
+    lines.push(m.role === "user" ? `## You` : `## Assistant`);
+    lines.push(``);
+    lines.push(m.content);
+    lines.push(``);
+  }
+
+  if (scope === "full" && state.stats.turns > 0) {
+    lines.push(`---`);
+    lines.push(``);
+    lines.push(
+      `*${state.stats.turns} turns · ${state.stats.tokens} tokens · ${formatCost(state.stats.costUsd)}*`,
+    );
+    lines.push(``);
+  }
+  return lines.join("\n");
+}
+
+function lastExchange(history: ChatMessage[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    out.unshift(history[i]);
+    if (history[i].role === "user") break;
+  }
+  return out;
 }
 
 function indent(text: string): string {
