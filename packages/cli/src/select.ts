@@ -1,6 +1,74 @@
 import { checkbox, select, input } from "@inquirer/prompts";
+import chalk from "chalk";
 import type { LLMProvider } from "@modelclash/core";
 import type { ProviderName } from "@modelclash/core";
+
+const THEME = {
+  prefix: { idle: chalk.cyan("◆"), done: chalk.green("✓") },
+  spinner: {
+    interval: 80,
+    frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+  },
+  style: {
+    answer: (text: string) => chalk.cyan(text),
+    message: (text: string) => chalk.bold(text),
+    error: (text: string) => chalk.red(text),
+    defaultAnswer: (text: string) => chalk.dim(text),
+    help: (text: string) => chalk.dim(text),
+    highlight: (text: string) => chalk.cyan.bold(text),
+    key: (text: string) => chalk.cyan(`<${text}>`),
+    disabled: (text: string) => chalk.gray.strikethrough(text),
+    description: (text: string) => chalk.dim(text),
+  },
+  icon: {
+    checked: chalk.green("◉"),
+    unchecked: chalk.dim("◯"),
+    cursor: chalk.cyan("❯"),
+  },
+};
+
+const PROVIDER_LABEL: Record<ProviderName, { name: string; tag: string }> = {
+  openai: { name: "OpenAI", tag: "GPT · o-series" },
+  anthropic: { name: "Anthropic", tag: "Claude" },
+  google: { name: "Google", tag: "Gemini" },
+  groq: { name: "Groq", tag: "Llama · Mixtral · ultra-fast" },
+  deepseek: { name: "DeepSeek", tag: "chat · reasoner" },
+  ollama: { name: "Ollama", tag: "local · free" },
+};
+
+export function printSetupIntro(available: ProviderName[]): void {
+  const cols = process.stdout.columns ?? 100;
+  const w = Math.max(60, Math.min(cols, 100));
+  const inner = w - 4;
+  const top = chalk.cyan("╭─── setup " + "─".repeat(w - 11) + "╮");
+  const bot = chalk.cyan("╰" + "─".repeat(w - 2) + "╯");
+  const pad = (s: string, visLen: number) =>
+    chalk.cyan("│ ") + s + " ".repeat(Math.max(0, inner - visLen)) + chalk.cyan(" │");
+
+  const title = `${chalk.bold("⚔  modelclash")} ${chalk.dim("·  multi-LLM chat setup")}`;
+  const titleVis = "⚔  modelclash ·  multi-LLM chat setup".length;
+  const subtitle = chalk.dim("Pick the providers and models you want to chat with.");
+  const subVis = "Pick the providers and models you want to chat with.".length;
+
+  console.log();
+  console.log(top);
+  console.log(pad(title, titleVis));
+  console.log(pad(subtitle, subVis));
+  console.log(pad("", 0));
+  console.log(pad(chalk.bold("Available providers"), 19));
+  for (const p of available) {
+    const meta = PROVIDER_LABEL[p];
+    const line = `  ${chalk.green("●")} ${chalk.bold(meta.name.padEnd(10))} ${chalk.dim(meta.tag)}`;
+    const lineVis = 2 + 2 + 10 + 1 + meta.tag.length;
+    console.log(pad(line, lineVis));
+  }
+  console.log(pad("", 0));
+  const hint = chalk.dim("space toggles · a all · i invert · ⏎ confirm");
+  const hintVis = "space toggles · a all · i invert · ⏎ confirm".length;
+  console.log(pad(hint, hintVis));
+  console.log(bot);
+  console.log();
+}
 
 const ALL: ProviderName[] = [
   "openai",
@@ -58,14 +126,19 @@ export async function pickProvidersInteractive(
 ): Promise<ProviderName[]> {
   if (available.length <= 1) return available;
   const selected = await checkbox<ProviderName>({
-    message: "Select providers (space to toggle, enter to confirm):",
-    choices: available.map((name) => ({
-      name,
-      value: name,
-      checked: true,
-    })),
+    message: "Which providers should answer?",
+    choices: available.map((name) => {
+      const meta = PROVIDER_LABEL[name];
+      return {
+        name: `${meta.name.padEnd(10)} ${chalk.dim(meta.tag)}`,
+        value: name,
+        checked: true,
+        short: name,
+      };
+    }),
     required: true,
     loop: false,
+    theme: THEME,
   });
   return selected;
 }
@@ -75,24 +148,31 @@ export async function pickModelInteractive(
   currentDefault: string,
 ): Promise<string> {
   const known = MODELS_BY_PROVIDER[provider] ?? [];
+  const meta = PROVIDER_LABEL[provider];
   const choices = [
     ...known.map((m) => ({
-      name: m === currentDefault ? `${m}  (default)` : m,
+      name:
+        m === currentDefault
+          ? `${m.padEnd(28)} ${chalk.dim("default")}`
+          : m,
       value: m,
+      short: m,
     })),
-    { name: "✎ custom…", value: "__custom__" },
+    { name: chalk.dim("✎  custom model name…"), value: "__custom__", short: "custom" },
   ];
   const picked = await select<string>({
-    message: `Pick a model for ${provider}:`,
+    message: `Pick a model for ${chalk.cyan(meta.name)}`,
     choices,
     default: known.includes(currentDefault) ? currentDefault : known[0],
     loop: false,
+    theme: THEME,
   });
   if (picked !== "__custom__") return picked;
   const typed = (
     await input({
-      message: `${provider} model name:`,
+      message: `${meta.name} model name`,
       default: currentDefault,
+      theme: THEME,
     })
   ).trim();
   return typed.length > 0 ? typed : currentDefault;
@@ -112,14 +192,15 @@ export async function pickEffortInteractive(
   current: EffortLevel = "medium",
 ): Promise<EffortLevel> {
   return select<EffortLevel>({
-    message: `Reasoning effort for ${provider}/${model}:`,
+    message: `Reasoning effort for ${chalk.cyan(provider)} ${chalk.dim("·")} ${chalk.bold(model)}`,
     choices: [
-      { name: "low      — fastest, cheapest, shallow reasoning", value: "low" },
-      { name: "medium   — balanced (default)", value: "medium" },
-      { name: "high     — deepest reasoning, slower & costlier", value: "high" },
+      { name: `low      ${chalk.dim("— fastest, cheapest, shallow reasoning")}`, value: "low" },
+      { name: `medium   ${chalk.dim("— balanced (default)")}`, value: "medium" },
+      { name: `high     ${chalk.dim("— deepest reasoning, slower & costlier")}`, value: "high" },
     ],
     default: current,
     loop: false,
+    theme: THEME,
   });
 }
 
@@ -127,9 +208,17 @@ export async function pickProviderInteractive(
   providers: ProviderName[],
 ): Promise<ProviderName> {
   return select<ProviderName>({
-    message: "Pick a provider:",
-    choices: providers.map((p) => ({ name: p, value: p })),
+    message: "Pick a provider",
+    choices: providers.map((p) => {
+      const meta = PROVIDER_LABEL[p];
+      return {
+        name: `${meta.name.padEnd(10)} ${chalk.dim(meta.tag)}`,
+        value: p,
+        short: p,
+      };
+    }),
     loop: false,
+    theme: THEME,
   });
 }
 

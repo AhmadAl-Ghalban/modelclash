@@ -27,6 +27,7 @@ import {
   pickModelInteractive,
   pickProviderInteractive,
   pickEffortInteractive,
+  printSetupIntro,
   MODELS_WITH_EFFORT,
   type EffortLevel,
 } from "./select.js";
@@ -132,6 +133,7 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
     }
     selected = requested.filter((p) => available.includes(p));
   } else {
+    if (process.stdin.isTTY) printSetupIntro(available);
     selected = await pickProvidersInteractive(available);
   }
 
@@ -148,6 +150,13 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
   const needsPick = selected.some((p) => !explicitModel[p]);
   const effort: Partial<Record<ProviderName, EffortLevel>> = {};
   if (needsPick && process.stdin.isTTY) {
+    console.log();
+    console.log(
+      chalk.cyan("  ─ ") +
+        chalk.bold(`pick a model for each of ${selected.length} provider${selected.length === 1 ? "" : "s"}`) +
+        chalk.cyan(" ─"),
+    );
+    console.log();
     const picks = await pickModelsInteractive(selected, settings.models, explicitModel);
     for (const [name, model] of Object.entries(picks)) {
       if (!model) continue;
@@ -1086,118 +1095,72 @@ function formatMarkdown(text: string): string {
 
 function printWelcome(state: ChatState): void {
   const cols = process.stdout.columns ?? 100;
-  const w = Math.max(80, Math.min(cols, 140));
-  const leftW = 44;
-  const rightW = w - leftW - 5;
-  const sep = chalk.cyan("│");
+  const w = Math.max(70, Math.min(cols, 110));
+  const user = process.env.USER ?? process.env.USERNAME ?? "friend";
 
-  const user = process.env.USER ?? process.env.USERNAME ?? "there";
-  const greet = `Welcome back ${user}!`;
+  const gradient = ["#7c3aed", "#6366f1", "#3b82f6", "#06b6d4", "#10b981"];
+  const word = "modelclash";
+  const wordmark = [...word]
+    .map((ch, i) => chalk.hex(gradient[i % gradient.length]).bold(ch))
+    .join("");
 
-  const logo = [
-    "    ▐▛███▜▌    ",
-    "   ▝▜█████▛▘   ",
-    "     ▘▘ ▝▝     ",
-  ];
+  const accent = chalk.hex("#7c3aed")("▎");
+  const dot = chalk.dim("·");
+  const hr = chalk.hex("#374151")("╶" + "─".repeat(w - 4) + "╴");
 
-  const left: string[] = [];
-  left.push(centerVisible(chalk.bold(greet), leftW, greet.length));
-  left.push("");
-  for (const ln of logo) left.push(centerVisible(chalk.cyan(ln), leftW, ln.length));
-  left.push("");
-  const brand = "⚔  modelclash · multi-LLM chat";
-  left.push(centerVisible(chalk.cyan(brand), leftW, brand.length));
+  const now = new Date();
+  const ts =
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}` +
+    ` ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
   const cwd = process.cwd();
-  const cwdShort = cwd.length > leftW - 4 ? "…" + cwd.slice(-(leftW - 5)) : cwd;
-  left.push(centerVisible(chalk.dim(cwdShort), leftW, cwdShort.length));
+  const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const cwdShort = home && cwd.startsWith(home) ? "~" + cwd.slice(home.length) : cwd;
 
-  const right: string[] = [];
-  right.push(chalk.bold("Tips for getting started"));
-  right.push(
-    truncateVisible(
-      chalk.dim("Type ") + chalk.cyan("/") + chalk.dim(" to see the full command menu"),
-      rightW,
-    ),
+  console.log();
+  console.log(
+    `  ${accent} ${wordmark}   ${chalk.dim("multi-LLM chat")}   ${chalk.green("●")} ${chalk.green.bold("ready")}`,
   );
-  right.push(
-    truncateVisible(
-      chalk.dim("Use ") + chalk.cyan("/model") + chalk.dim(" to switch model + reasoning effort"),
-      rightW,
-    ),
-  );
-  right.push(
-    truncateVisible(
-      chalk.dim("Press ") + chalk.cyan("↑/↓") + chalk.dim(" to walk through input history"),
-      rightW,
-    ),
-  );
-  right.push(chalk.dim("─".repeat(rightW - 2)));
-  right.push(chalk.bold("Active providers"));
+  console.log(`  ${accent} ${chalk.dim(`hello, ${chalk.reset.bold(user)}   ${dot}   ${ts}`)}`);
+  console.log(`  ${accent} ${chalk.dim(cwdShort)}`);
+  console.log();
+  console.log(hr);
+  console.log();
+
+  const label = chalk.dim("active") + "  ";
+  let first = true;
   for (const name of state.selected) {
     const color = PROVIDER_COLORS[name];
     const model = state.settings.models[name];
-    const eff = state.effort[name] ? chalk.dim(` · effort ${state.effort[name]}`) : "";
-    const text = `${color("●")} ${color(name)} ${chalk.dim("· " + model)}${eff}`;
-    const visLen = 2 + name.length + 3 + model.length + (state.effort[name] ? 10 + (state.effort[name] ?? "").length : 0);
-    right.push(padVisible(text, rightW, visLen));
+    const eff = state.effort[name];
+    const chip =
+      color("▎") +
+      color.bold(name) +
+      " " +
+      chalk.dim(model) +
+      (eff ? "  " + chalk.bgHex("#1f2937").hex("#fbbf24").bold(` effort ${eff} `) : "");
+    console.log(`  ${first ? label : "        "}${chip}`);
+    first = false;
   }
-
-  const top = chalk.cyan("╭─── modelclash " + "─".repeat(w - 16) + "╮");
-  const bot = chalk.cyan("╰" + "─".repeat(w - 2) + "╯");
-
-  const rows = Math.max(left.length, right.length);
 
   console.log();
-  console.log(top);
-  for (let i = 0; i < rows; i++) {
-    const L = left[i] ?? " ".repeat(leftW);
-    const R = right[i] ?? " ".repeat(rightW);
-    console.log(`${sep} ${padVisibleRaw(L, leftW)} ${sep} ${padVisibleRaw(R, rightW)} ${sep}`);
-  }
-  console.log(bot);
+  const tip = (k: string, t: string) =>
+    chalk.hex("#1f2937").bgHex("#e5e7eb").bold(` ${k} `) + " " + chalk.dim(t);
+  const tips = [
+    tip("/", "commands"),
+    tip("↑↓", "history"),
+    tip("⏎", "send"),
+    tip("esc", "clear"),
+    tip("^c", "exit"),
+  ];
+  console.log(`  ${chalk.dim("keys")}    ${tips.join("   ")}`);
 
-  const hr = chalk.dim("─".repeat(w));
-  console.log(hr);
-  const placeholder = chalk.dim('Try "What can these models do for me?"');
-  console.log(`${chalk.cyan("❯")} ${placeholder}`);
+  console.log();
   console.log(hr);
   console.log(
-    "  " +
-      chalk.dim("/ ") +
-      chalk.dim("commands · ") +
-      chalk.dim("↑↓ ") +
-      chalk.dim("history · ") +
-      chalk.dim("esc ") +
-      chalk.dim("clear · ") +
-      chalk.dim("ctrl-c ") +
-      chalk.dim("exit"),
+    `  ${chalk.dim("hint")}    ${chalk.dim("try")} ${chalk.italic('"compare these models on a haiku about rain"')}`,
   );
   console.log();
-}
-
-function stripAnsiLen(s: string): number {
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
-
-function padVisibleRaw(s: string, width: number): string {
-  const len = stripAnsiLen(s);
-  return len >= width ? s : s + " ".repeat(width - len);
-}
-
-function padVisible(s: string, width: number, visLen: number): string {
-  return visLen >= width ? s : s + " ".repeat(width - visLen);
-}
-
-function centerVisible(s: string, width: number, visLen: number): string {
-  if (visLen >= width) return s;
-  const pad = Math.floor((width - visLen) / 2);
-  return " ".repeat(pad) + s + " ".repeat(width - visLen - pad);
-}
-
-function truncateVisible(s: string, width: number): string {
-  const len = stripAnsiLen(s);
-  if (len <= width) return padVisibleRaw(s, width);
-  return s.slice(0, width - 1) + chalk.dim("…");
 }
 
 function printGoodbye(state: ChatState): void {
