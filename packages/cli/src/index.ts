@@ -20,6 +20,7 @@ import {
 } from "./formatter.js";
 import { buildConfigCommand } from "./config-cmd.js";
 import { buildChatCommand } from "./chat-cmd.js";
+import { buildReviewCommand } from "./review-cmd.js";
 import {
   parseProviderList,
   filterProviders,
@@ -71,6 +72,7 @@ program
 
 program.addCommand(buildConfigCommand());
 program.addCommand(buildChatCommand());
+program.addCommand(buildReviewCommand());
 
 async function runCli(prompt: string, opts: PromptCliOptions): Promise<void> {
   const config = await loadConfig();

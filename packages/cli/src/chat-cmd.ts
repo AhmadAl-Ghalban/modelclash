@@ -3,7 +3,7 @@ import chalk from "chalk";
 import ora from "ora";
 import { writeFile, readFile, mkdir, access } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve as resolvePath, dirname, isAbsolute, join } from "node:path";
+import { resolve as resolvePath, dirname, isAbsolute, join, basename } from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
   loadConfig,
@@ -32,6 +32,7 @@ import {
   type EffortLevel,
 } from "./select.js";
 import { PROVIDER_COLORS, formatTurnSummary } from "./formatter.js";
+import { buildProjectContext, buildReviewPrompt } from "./project-context.js";
 
 const ALL_PROVIDERS: ProviderName[] = [
   "openai",
@@ -72,7 +73,27 @@ interface ChatState {
   history: ChatMessage[];
   stream: boolean;
   stats: SessionStats;
+  suggestions: string[];
 }
+
+const AGENT_SYSTEM_PROMPT = `You are an expert pair-programmer working alongside the user in an interactive CLI. Be proactive, creative, and concrete — not passive. Volunteer concerns, point out bugs you notice, and propose specific changes rather than generic advice.
+
+When your response includes code that should land in a specific file, return COMPLETE file contents in a fenced code block tagged with the destination path, like this:
+
+\`\`\`typescript path=src/foo.ts
+// full file contents here, not a snippet
+\`\`\`
+
+The CLI will offer to write those files to disk automatically. Use snippets without \`path=\` only for explanation.
+
+ALWAYS end every response with a short section exactly like:
+
+### Next steps
+1. <one short, concrete, actionable suggestion>
+2. <another>
+3. <another>
+
+Suggestions must be specific to this conversation — not generic ("ask a follow-up question" is bad; "add a /pick <n> slash command to chat-cmd.ts" is good). The user can run any of them by typing /pick 1, /pick 2, or /pick 3.`;
 
 export function buildChatCommand(): Command {
   return new Command("chat")
@@ -174,7 +195,8 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
     providers: filterProviders(all, selected),
     settings,
     effort,
-    systemPrompt: opts.system,
+    systemPrompt: opts.system ?? AGENT_SYSTEM_PROMPT,
+    suggestions: [],
     history: [],
     stream: opts.noStream !== true,
     stats: { turns: 0, tokens: 0, costUsd: 0, byProvider: {} },
@@ -290,11 +312,48 @@ function resolveUserPath(p: string): string {
 }
 
 function defaultSavePath(format: "md" | "json"): string {
+  const dir = join(homedir(), "modelclash-chats");
+  return join(dir, `chat-${timestampStamp()}.${format}`);
+}
+
+function timestampStamp(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
-  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
-  const dir = join(homedir(), "modelclash-chats");
-  return join(dir, `chat-${stamp}.${format}`);
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+async function saveLastResponseToFile(
+  state: ChatState,
+  outPath: string,
+  meta?: { title?: string; subtitle?: string; request?: string },
+): Promise<void> {
+  const last = [...state.history].reverse().find((m) => m.role === "assistant");
+  if (!last) {
+    console.log(chalk.dim("  nothing to write (no assistant response yet)"));
+    return;
+  }
+  const lines: string[] = [];
+  lines.push(`# ${meta?.title ?? "Response"}`);
+  if (meta?.subtitle) lines.push(`\n*${meta.subtitle}*`);
+  lines.push(``);
+  lines.push(`*Saved ${new Date().toISOString()}*`);
+  const providerList = state.selected
+    .map((p) => `\`${p}\` (${state.settings.models[p]})`)
+    .join(", ");
+  lines.push(`\n**Providers:** ${providerList}`);
+  if (meta?.request) {
+    lines.push(`\n**Request:** ${meta.request}`);
+  }
+  lines.push(`\n---\n`);
+  lines.push(last.content);
+  try {
+    await mkdir(dirname(outPath), { recursive: true });
+    await writeFile(outPath, lines.join("\n"), "utf8");
+    console.log(chalk.dim(`  ✓ saved → ${outPath}`));
+  } catch (err) {
+    console.log(chalk.red(`  ✗ write failed: ${(err as Error).message}`));
+    console.log(chalk.dim(`    tried path: ${outPath}`));
+  }
 }
 
 const SLASH_COMMANDS: { name: string; desc: string }[] = [
@@ -310,6 +369,9 @@ const SLASH_COMMANDS: { name: string; desc: string }[] = [
   { name: "/retry", desc: "re-run the last user message" },
   { name: "/clear", desc: "clear the screen" },
   { name: "/reset", desc: "clear conversation history" },
+  { name: "/review", desc: "review a project: /review <path> <request>" },
+  { name: "/pick", desc: "run a suggested next step: /pick 1|2|3" },
+  { name: "/write", desc: "save last response to a markdown file" },
   { name: "/save", desc: "save transcript (.md or .json)" },
   { name: "/load", desc: "load conversation from JSON" },
   { name: "/exit", desc: "leave the chat" },
@@ -833,6 +895,79 @@ async function handleSlash(
       return "handled";
     }
 
+    case "/review": {
+      const parts = rest;
+      const defaultRequest =
+        "Perform a thorough code review of this project. Identify bugs, security issues, design concerns, and concrete improvements. Reference specific files and lines.";
+      let path = parts[0];
+      let request = parts.slice(1).join(" ").trim();
+      if (!path) {
+        path = (await promptLine(chalk.cyan("  path to project: "))).trim();
+        if (!path) {
+          console.log(chalk.dim("  ✗ no path provided"));
+          return "handled";
+        }
+      }
+      if (!request) {
+        const typed = (
+          await promptLine(
+            chalk.cyan("  what to review? ") + chalk.dim("(blank = general code review) "),
+          )
+        ).trim();
+        request = typed || defaultRequest;
+      }
+      try {
+        console.log(chalk.dim(`  scanning ${path}…`));
+        const ctx = await buildProjectContext(path);
+        if (ctx.filesIncluded === 0) {
+          console.log(chalk.red(`  no reviewable source files under ${ctx.root}`));
+          return "handled";
+        }
+        console.log(
+          chalk.dim(
+            `  ${ctx.filesIncluded} files · ${(ctx.bytesIncluded / 1024).toFixed(1)}KB${ctx.truncated ? " (truncated)" : ""}${ctx.filesSkipped > 0 ? ` · ${ctx.filesSkipped} skipped` : ""}`,
+          ),
+        );
+        const prompt = buildReviewPrompt(ctx, request);
+        await runTurn(state, prompt);
+        const outPath = resolvePath(
+          process.cwd(),
+          `review-${basename(ctx.root) || "project"}-${timestampStamp()}.md`,
+        );
+        await saveLastResponseToFile(state, outPath, {
+          title: `Review of ${basename(ctx.root)}`,
+          subtitle: ctx.root,
+          request,
+        });
+      } catch (err) {
+        console.log(chalk.red(`  ✗ review failed: ${(err as Error).message}`));
+      }
+      return "handled";
+    }
+
+    case "/pick": {
+      const n = Number.parseInt(arg, 10);
+      if (!Number.isFinite(n) || n < 1 || n > state.suggestions.length) {
+        if (state.suggestions.length === 0) {
+          console.log(chalk.dim("  no suggestions available yet"));
+        } else {
+          console.log(chalk.dim(`  usage: /pick 1..${state.suggestions.length}`));
+        }
+        return "handled";
+      }
+      const choice = state.suggestions[n - 1];
+      console.log(chalk.dim(`  → ${choice}`));
+      await runTurn(state, choice);
+      return "handled";
+    }
+
+    case "/write": {
+      const rawPath = arg || `response-${timestampStamp()}.md`;
+      const outPath = resolveUserPath(rawPath);
+      await saveLastResponseToFile(state, outPath);
+      return "handled";
+    }
+
     case "/save": {
       if (state.history.length === 0) {
         console.log(chalk.dim("  nothing to save (history is empty)"));
@@ -952,14 +1087,115 @@ async function runTurn(state: ChatState, input: string): Promise<void> {
   }
 
   state.history.push({ role: "user", content: input });
-  if (ok.length === 1) {
-    state.history.push({ role: "assistant", content: ok[0].value.text });
-  } else {
-    const joined = ok
-      .map((r) => `[${r.value.provider}] ${r.value.text}`)
-      .join("\n\n");
-    state.history.push({ role: "assistant", content: joined });
+  const assistantText =
+    ok.length === 1
+      ? ok[0].value.text
+      : ok.map((r) => `[${r.value.provider}] ${r.value.text}`).join("\n\n");
+  state.history.push({ role: "assistant", content: assistantText });
+
+  await maybeExtractFiles(assistantText);
+  state.suggestions = extractNextSteps(assistantText);
+  if (state.suggestions.length > 0) {
+    printSuggestions(state.suggestions);
   }
+}
+
+const CODE_BLOCK_WITH_PATH =
+  /```[a-zA-Z0-9_+\-.]*\s+path=([^\s`\n]+)\s*\n([\s\S]*?)```/g;
+
+interface ExtractedFile {
+  path: string;
+  content: string;
+}
+
+function extractFileBlocks(text: string): ExtractedFile[] {
+  const out: ExtractedFile[] = [];
+  let m: RegExpExecArray | null;
+  CODE_BLOCK_WITH_PATH.lastIndex = 0;
+  while ((m = CODE_BLOCK_WITH_PATH.exec(text)) !== null) {
+    out.push({ path: m[1].trim(), content: m[2].replace(/\n$/, "") });
+  }
+  return out;
+}
+
+async function maybeExtractFiles(text: string): Promise<void> {
+  const files = extractFileBlocks(text);
+  if (files.length === 0) return;
+  if (!process.stdin.isTTY) return;
+  console.log();
+  console.log(
+    chalk.cyan(`  ◆ ${files.length} file block${files.length === 1 ? "" : "s"} detected:`),
+  );
+  for (const f of files) console.log(`    ${chalk.dim("•")} ${f.path}`);
+  const ans = (
+    await promptLine(
+      chalk.cyan("  write to disk? ") + chalk.dim("[Y/n/i=pick individually] "),
+    )
+  )
+    .trim()
+    .toLowerCase();
+  if (ans === "n" || ans === "no") {
+    console.log(chalk.dim("  ✗ skipped"));
+    return;
+  }
+  const individually = ans === "i";
+  for (const f of files) {
+    const outPath = resolveUserPath(f.path);
+    if (individually) {
+      const a = (
+        await promptLine(chalk.cyan(`  write ${outPath}? `) + chalk.dim("[Y/n] "))
+      )
+        .trim()
+        .toLowerCase();
+      if (a === "n" || a === "no") continue;
+    }
+    if (await pathExists(outPath)) {
+      const a = (
+        await promptLine(
+          chalk.yellow(`  ⚠  ${outPath} exists — overwrite? `) + chalk.dim("[y/N] "),
+        )
+      )
+        .trim()
+        .toLowerCase();
+      if (a !== "y" && a !== "yes") {
+        console.log(chalk.dim(`  ✗ skipped ${outPath}`));
+        continue;
+      }
+    }
+    try {
+      await mkdir(dirname(outPath), { recursive: true });
+      await writeFile(outPath, f.content, "utf8");
+      console.log(chalk.green(`  ✓ wrote ${outPath}`));
+    } catch (err) {
+      console.log(chalk.red(`  ✗ ${outPath}: ${(err as Error).message}`));
+    }
+  }
+}
+
+function extractNextSteps(text: string): string[] {
+  const idx = text.search(/^#{1,4}\s*Next steps\b/im);
+  if (idx === -1) return [];
+  const section = text.slice(idx);
+  const lines = section.split("\n").slice(1);
+  const items: string[] = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*(?:\d+[.)]|[-*])\s+(.+\S)\s*$/);
+    if (m) {
+      items.push(m[1]);
+      if (items.length >= 3) break;
+    } else if (items.length > 0 && line.trim() === "") {
+      break;
+    }
+  }
+  return items;
+}
+
+function printSuggestions(items: string[]): void {
+  console.log();
+  console.log(chalk.cyan("  ▎ next steps") + chalk.dim("  (/pick 1, /pick 2, /pick 3)"));
+  items.forEach((s, i) => {
+    console.log(`    ${chalk.cyan(`[${i + 1}]`)} ${s}`);
+  });
 }
 
 function buildHistoryForRequest(state: ChatState): ChatMessage[] {
@@ -1189,6 +1425,9 @@ function printHelp(): void {
     ["/system <text>", "set system prompt (or 'off' to clear)"],
     ["/model [provider] [name]", "switch model (interactive if args omitted)"],
     ["/effort <provider> <lvl>", "set reasoning effort: low|medium|high"],
+    ["/review <path> [req]", "bundle a project folder and review it"],
+    ["/pick <n>", "run a suggested next step (1, 2, or 3)"],
+    ["/write [path]", "save last response to a markdown file"],
     ["/save [path]", "save transcript (.md → markdown, .json → JSON)"],
     ["/load <path>", "load conversation from JSON"],
     ["end line with \\", "multi-line input"],

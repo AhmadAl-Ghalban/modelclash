@@ -1,6 +1,6 @@
 # modelclash ⚔️
 
-A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**, **Google**, **Groq**, **DeepSeek**, and local **Ollama** models — side-by-side from a single prompt, or in an interactive multi-turn chat.
+A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**, **Google**, **Groq**, **DeepSeek**, and local **Ollama** models — side-by-side from a single prompt, in an interactive multi-turn chat, or as a multi-model code reviewer pointed at a project folder.
 
 > **Keep this file in sync.** Whenever you add, remove, or change a feature, flag, script, env var, or run step, update the matching section of this README in the **same PR**. CI (see [Continuous Integration](#continuous-integration)) does not check docs — reviewers do.
 
@@ -14,6 +14,8 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 - Retry with exponential backoff and per-request timeouts
 - User config at `~/.modelclash/config.json` (managed via `modelclash config`)
 - Provider selection: `--providers openai,groq` flag or interactive checkbox picker
+- **Project review subcommand** — `modelclash review <path> [request]` bundles every reviewable source file under a folder and asks all selected providers for a thorough code review in parallel (same provider-picker, JSON/save, streaming, and summary table as the one-shot mode)
+- **Agent-style chat** — replies end with a numbered `Next steps` block you can run with `/pick 1|2|3`, and any fenced code block tagged `path=foo/bar.ts` is offered to write straight to disk (with overwrite prompts)
 - Multi-turn `modelclash chat` REPL with:
   - **Claude-Code-style intro** — two-column rounded box with greeting, ASCII logo, current working dir, tips, and the active provider list with reasoning-effort badges
   - **Boxed input prompt** — `╭─❯ … ─╮` style with persistent status footer (provider chips · stream mode · temperature · `/ for commands`)
@@ -225,6 +227,41 @@ npm run cli -- "Capital of Iceland?" --json | jq '.results[].text'
 npm run cli -- "Hello" --providers groq,google,deepseek,ollama
 ```
 
+## Review mode
+
+Point modelclash at a project folder and every selected provider produces an independent code review in parallel — same comparison table, same `--json` / `--save` plumbing as the one-shot mode.
+
+```bash
+# General review across all providers with keys (interactive picker in a TTY)
+npm run cli -- review ./my-app
+
+# Targeted review with a specific request
+npm run cli -- review ./my-app "Focus on auth, sessions, and CSRF risks"
+
+# Pin providers, save the JSON report
+npm run cli -- review ./my-app --providers openai,anthropic --save review.json
+
+# Cap how much source gets bundled (bytes)
+npm run cli -- review ./my-app --max-bytes 200000
+```
+
+modelclash walks the folder, skips `node_modules`, `dist`, `.git`, lockfiles, binaries, etc., and packs the remaining source into a single prompt. A header line reports `<n> files · <KB> · (truncated)` if the byte cap kicked in.
+
+### Review flags
+
+| Flag                        | Description                                                | Default |
+| --------------------------- | ---------------------------------------------------------- | ------- |
+| `-p, --providers <list>`    | Comma-separated providers                                  | all with keys |
+| `--model-<provider> <name>` | Per-provider model override                                | per-provider default |
+| `-t, --temperature <num>`   | Sampling temperature                                       | `0.7`   |
+| `--stream`                  | Stream responses (sequential)                              | `false` |
+| `--json`                    | Output JSON only (suppresses picker)                       | `false` |
+| `--save <file>`             | Save JSON report to file                                   | —       |
+| `--timeout <ms>`            | Request timeout in ms                                      | `60000` |
+| `--max-bytes <n>`           | Max total bytes of source to bundle into the prompt        | built-in cap |
+
+The same review flow is also available inside chat as the `/review <path> [request]` slash command — it reuses the chat's current providers/models and writes the resulting markdown to `review-<folder>-<YYYYMMDD-HHMM>.md` in your cwd.
+
 ## Chat mode
 
 Multi-turn conversation against the providers you pick. Responses stream live (sequentially per provider), and after each turn a comparison table summarises every model's tokens, cost, time, and throughput — with auto-badges for the fastest, cheapest, longest, and highest tok/s response.
@@ -287,6 +324,9 @@ The prompt runs in raw mode with full single-line editing:
 | `/model <provider>`           | pick model + effort for one provider                                   |
 | `/model <provider> <name>`    | set a model directly (effort prompt only if model supports it)         |
 | `/effort <provider> <lvl>`    | set reasoning effort: `low` / `medium` / `high`                        |
+| `/review <path> [request]`    | bundle a project folder and ask the current providers to review it; saves a `review-<folder>-<stamp>.md` next to where you ran the CLI |
+| `/pick <n>`                   | run suggestion 1, 2, or 3 from the last `Next steps` block as your next prompt |
+| `/write [path]`               | save the last assistant response to a markdown file (default `response-YYYYMMDD-HHMM.md` in cwd) |
 | `/save [path]`                | save transcript — `.md` for prose, `.json` to round-trip with `/load`. Prompts to confirm before writing; `~/…` paths expand. Default location: `~/modelclash-chats/`. |
 | `/load <path>`                | load conversation from JSON (accepts `~/…` paths)                      |
 
@@ -315,6 +355,33 @@ Conversation history is shared across providers — each turn's context includes
 4. Parent directory is auto-created with `mkdir -p`. `~/…` paths expand to your home directory.
 
 Decline → `✗ cancelled — not saved`. Failures show both the system error and the absolute path that was attempted, so you can spot permission or typo issues quickly.
+
+### Agent behaviour — `Next steps` & file writing
+
+Unless you pass `-s/--system`, chat boots with an agent-style system prompt that asks the model to:
+
+1. **End every reply with a `### Next steps` block** of three concrete, conversation-specific suggestions. modelclash parses that block and prints:
+
+   ```
+   ▎ next steps  (/pick 1, /pick 2, /pick 3)
+     [1] add a /pick <n> slash command to chat-cmd.ts
+     [2] write Vitest coverage for extractNextSteps
+     [3] document /review in the README
+   ```
+
+   `/pick 1` (or `2`, `3`) sends that exact suggestion as your next prompt.
+
+2. **Return full file contents in fenced blocks tagged with a destination path**, e.g.:
+
+   ````
+   ```typescript path=packages/cli/src/foo.ts
+   // full file contents…
+   ```
+   ````
+
+   After the reply renders, modelclash lists every detected file and asks `write to disk? [Y/n/i=pick individually]`. Existing paths require an explicit `y` to overwrite. `~/…` paths expand. Snippets without `path=` are treated as plain examples and not written.
+
+Pass `-s "<your prompt>"` (or set `/system <text>` mid-chat) to replace the agent prompt with your own — the `/pick` and file-write behaviour will still work if your model happens to produce the same formats, but won't be elicited by default.
 
 ### Markdown rendering
 
@@ -345,7 +412,10 @@ Monorepo using npm workspaces.
 packages/
   core/                     # @modelclash/core — providers, pricing, retry, cost, orchestrator
     src/providers/          # openai, anthropic, google, groq, openai-compatible (deepseek + ollama)
-  cli/                      # modelclash — CLI entrypoint, chat REPL, config command
+  cli/                      # modelclash — CLI entrypoint, chat REPL, config + review commands
+    src/chat-cmd.ts         # chat REPL, agent prompt, /pick + file-write extraction
+    src/review-cmd.ts       # `review <path>` subcommand
+    src/project-context.ts  # walks a project folder & builds the review prompt
   server/                   # (optional) HTTP wrapper
 .github/
   workflows/
@@ -374,6 +444,8 @@ When sending this repo to someone for testing, point them at the [Quick start](#
 This README is the contract with anyone running the project. When a PR changes any of the following, update the matching section in the **same PR**:
 
 - New/removed/renamed CLI flag → **CLI usage › Flags** or **Chat flags**
+- New/changed `review` flag or behaviour → **Review mode**
+- Change to the agent system prompt, `Next steps` parsing, or `path=` file-write flow → **Chat mode › Agent behaviour**
 - New/changed slash command → **Chat mode › Slash commands** (and **Live slash menu** if its key bindings change)
 - New reasoning/effort plumbing or model-picker behaviour → **Chat mode › Reasoning effort**
 - Change to the input prompt key bindings → **Chat mode › Input editing**
