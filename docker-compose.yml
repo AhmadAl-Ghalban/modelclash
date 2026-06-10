@@ -1,4 +1,59 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: modelclash-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: modelclash
+      POSTGRES_PASSWORD: modelclash
+      POSTGRES_DB: modelclash
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modelclash -d modelclash"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    build:
+      context: .
+      dockerfile: packages/server/Dockerfile
+    container_name: modelclash-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://modelclash:modelclash@postgres:5432/modelclash
+      PORT: 3001
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      NODE_ENV: production
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/api/settings || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+    container_name: modelclash-web
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      NUXT_PUBLIC_API_BASE: ${API_BASE:-http://localhost:3001/api}
+    ports:
+      - "3000:3000"
+
   ollama:
     image: ollama/ollama:latest
     container_name: modelclash-ollama
@@ -13,8 +68,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot sidecar that pulls the default model after the server is up,
-  # then exits. Re-run with `docker compose run --rm ollama-pull` to grab more.
   ollama-pull:
     image: ollama/ollama:latest
     container_name: modelclash-ollama-pull
@@ -31,5 +84,7 @@ services:
     restart: "no"
 
 volumes:
+  postgres-data:
+    name: modelclash-postgres-data
   ollama-models:
     name: modelclash-ollama-models

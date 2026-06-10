@@ -9,15 +9,23 @@
   ],
   "scripts": {
     "build": "npm run build -w @modelclash/core && npm run build -w modelclash",
+    "build:server": "npm run build -w @modelclash/core && npm run build -w @modelclash/server",
+    "build:web": "npm run build -w @modelclash/web",
     "dev": "npm run dev --workspace @modelclash/cli",
+    "dev:server": "npm run start:dev --workspace @modelclash/server",
+    "dev:web": "npm run dev --workspace @modelclash/web",
     "start": "npm run start --workspace @modelclash/cli",
+    "start:server": "npm run start --workspace @modelclash/server",
     "cli": "npm run start --workspace modelclash --",
     "cli:dev": "npm run dev --workspace modelclash --",
     "cli:build": "npm run build --workspace modelclash",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b",
-    "clean": "rm -rf packages/*/dist"
+    "clean": "rm -rf packages/*/dist",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f server web"
   },
   "howToRun": {
     "install": "npm install",
