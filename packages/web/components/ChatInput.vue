@@ -1,26 +1,26 @@
 <template>
-  <div class="px-4 py-4 border-t border-slate-800 bg-slate-950">
+  <div class="px-4 py-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950">
     <div class="max-w-3xl mx-auto">
-      <div class="relative flex items-end gap-2 bg-slate-800 border border-slate-700 rounded-2xl p-3
+      <div class="relative flex items-end gap-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3
         focus-within:border-violet-500 transition-colors">
         <textarea
           ref="inputRef"
           v-model="input"
-          :disabled="disabled"
+          :disabled="loading"
           placeholder="Ask all models…"
           rows="1"
-          class="flex-1 bg-transparent text-sm text-white placeholder:text-slate-500 resize-none
+          class="flex-1 bg-transparent text-sm text-slate-900 dark:text-white placeholder:text-slate-500 resize-none
             outline-none leading-relaxed max-h-40 overflow-y-auto"
           @keydown.enter.exact.prevent="submit"
           @input="autoResize"
         />
         <button
           @click="submit"
-          :disabled="disabled || !input.trim()"
+          :disabled="loading || !input.trim()"
           class="flex-shrink-0 w-8 h-8 bg-violet-600 hover:bg-violet-500 disabled:opacity-40
             disabled:cursor-not-allowed rounded-xl flex items-center justify-center transition-all"
         >
-          <svg v-if="!disabled" class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg v-if="!loading" class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7" />
           </svg>
           <div v-else class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -34,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-const props = defineProps<{ disabled?: boolean }>()
+const props = defineProps<{ loading?: boolean }>()
 const emit = defineEmits<{ submit: [content: string] }>()
 
 const input = ref('')
@@ -42,7 +42,7 @@ const inputRef = ref<HTMLTextAreaElement>()
 
 function submit() {
   const content = input.value.trim()
-  if (!content || props.disabled) return
+  if (!content || props.loading) return
   emit('submit', content)
   input.value = ''
   nextTick(() => autoResize())

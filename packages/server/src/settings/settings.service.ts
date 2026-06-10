@@ -63,9 +63,16 @@ export class SettingsService {
 
   async getApiKeys(): Promise<Record<string, string>> {
     const settings = await this.settingRepo.find({ where: { enabled: true } });
-    return Object.fromEntries(
-      settings.filter((s) => s.apiKey).map((s) => [s.provider, s.apiKey]),
-    );
+    const result: Record<string, string> = {};
+    for (const s of settings) {
+      if (s.provider === 'ollama') {
+        // Ollama doesn't use an API key — the value is treated as a baseURL by core.
+        result.ollama = s.apiKey || process.env.OLLAMA_URL || 'http://ollama:11434/v1';
+      } else if (s.apiKey) {
+        result[s.provider] = s.apiKey;
+      }
+    }
+    return result;
   }
 
   async getModels(): Promise<Record<string, string>> {

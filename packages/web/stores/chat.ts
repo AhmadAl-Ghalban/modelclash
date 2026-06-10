@@ -19,8 +19,7 @@ export const useChatStore = defineStore('chat', () => {
   async function loadSessions() {
     isLoadingSessions.value = true
     try {
-      const res = await api.get<{ sessions: ChatSession[] }>('/chats')
-      sessions.value = res.sessions
+      sessions.value = await api.get<ChatSession[]>('/chats')
     } finally {
       isLoadingSessions.value = false
     }

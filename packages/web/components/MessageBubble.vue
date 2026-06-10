@@ -10,16 +10,16 @@
 
     <!-- Assistant / error message -->
     <div v-else class="max-w-[85%] w-full">
-      <div class="bg-slate-800 border rounded-2xl rounded-tl-sm overflow-hidden"
-        :class="isError ? 'border-red-500/30' : 'border-slate-700'">
+      <div class="bg-slate-100 dark:bg-slate-800 border rounded-2xl rounded-tl-sm overflow-hidden"
+        :class="isError ? 'border-red-500/30' : 'border-slate-200 dark:border-slate-700'">
         <!-- Provider header -->
         <div v-if="message.provider" class="flex items-center gap-2 px-4 py-2 border-b"
-          :class="isError ? 'border-red-500/20 bg-red-950/20' : 'border-slate-700 bg-slate-750'">
+          :class="isError ? 'border-red-500/20 bg-red-50 dark:bg-red-950/20' : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-850'">
           <div class="w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold"
             :class="providerColor(message.provider)">
             {{ message.provider[0].toUpperCase() }}
           </div>
-          <span class="text-xs font-medium capitalize" :class="isError ? 'text-red-400' : 'text-slate-400'">
+          <span class="text-xs font-medium capitalize" :class="isError ? 'text-red-600 dark:text-red-400' : 'text-slate-600 dark:text-slate-400'">
             {{ message.provider }}
             <span v-if="message.model" class="opacity-60">· {{ message.model }}</span>
           </span>
@@ -31,7 +31,7 @@
         </div>
         <!-- Content -->
         <div class="px-4 py-3 text-sm leading-relaxed"
-          :class="isError ? 'text-red-400' : 'text-slate-200'">
+          :class="isError ? 'text-red-600 dark:text-red-400' : 'text-slate-800 dark:text-slate-200'">
           <span class="whitespace-pre-wrap">{{ message.content }}</span>
         </div>
       </div>
@@ -58,5 +58,5 @@ const providerColor = (p: string) => ({
   groq: 'bg-purple-500/20 text-purple-400',
   deepseek: 'bg-cyan-500/20 text-cyan-400',
   ollama: 'bg-gray-500/20 text-gray-400',
-}[p] || 'bg-slate-500/20 text-slate-400')
+}[p] || 'bg-slate-500/20 text-slate-500 dark:text-slate-400')
 </script>

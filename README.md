@@ -26,6 +26,12 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
   - Conversation history, system prompts, session save/load (`.json` or `.md`), mid-chat model swap, `/retry` for the last user message
   - Per-turn comparison table with fastest / cheapest / longest / highest tok/s badges
 - Bundled Docker setup for running Ollama locally
+- **Web UI + HTTP API** — NestJS backend (`packages/server`) with Postgres-backed chat history & provider settings, plus a Nuxt 3 frontend (`packages/web`) with:
+  - ChatGPT-style **collapsible sidebar** with session list, hover + active accents
+  - **Light / dark theme toggle** (persists in `localStorage`, defaults to system preference)
+  - **Settings modal** for all 6 providers — toggle, masked API-key input, and a curated **model dropdown** per provider (with "+ custom model" fallback). Keys are persisted in Postgres, not the browser
+  - Streaming SSE chat with parallel responses per provider
+- One-command full stack via `docker compose up -d` (Postgres + NestJS + Nuxt + Ollama)
 - TypeScript strict mode, Vitest unit tests, npm workspaces monorepo
 
 ## Requirements
@@ -33,6 +39,7 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 - **Node.js ≥ 20** (CI tests on 20, 22; `.nvmrc` pins `20` for local dev — run `nvm use`)
 - **npm** (workspaces support — bundled with Node 20+)
 - An API key for at least one of: OpenAI, Anthropic, Google, Groq, DeepSeek — **or** a local Ollama install (no key needed)
+- **Postgres 16+** — only if you run the NestJS server / web UI natively. Skip if you use `docker compose up -d` (Postgres is included) or only use the CLI.
 
 ## Quick start (for testers)
 
@@ -49,9 +56,13 @@ cp .env.example .env
 # 3. Build
 npm run build
 
-# 4. Try it
+# 4. Try the CLI
 npm run cli -- "Explain quantum entanglement in one sentence."
 npm run cli -- chat
+
+# …or launch the full web stack (Postgres + NestJS API + Nuxt UI + Ollama)
+npm run docker:up
+# then open http://localhost:3000
 ```
 
 Providers without configured keys are simply skipped, so a single key is enough to try it out.
@@ -80,7 +91,21 @@ DEFAULT_OLLAMA_MODEL=llama3.2
 
 # Optional request timeout
 REQUEST_TIMEOUT_MS=60000
+
+# ── NestJS server (packages/server) ─────────────────────────
+DATABASE_URL=postgresql://modelclash:modelclash@localhost:5432/modelclash
+PORT=3001
+FRONTEND_URL=http://localhost:3000
+
+# ── Nuxt frontend (packages/web) ────────────────────────────
+NUXT_PUBLIC_API_BASE=http://localhost:3001/api
+
+# ── Docker Compose overrides ────────────────────────────────
+# OLLAMA_MODELS=llama3.2 qwen2.5    # space-separated models to pull
+# API_BASE=http://server:3001/api   # internal API URL when web runs in Docker
 ```
+
+The CLI only needs the provider keys at the top. The `DATABASE_URL` / `PORT` / `FRONTEND_URL` block is read by `packages/server`; `NUXT_PUBLIC_API_BASE` is read by `packages/web`.
 
 `.env` is searched upward from the current working directory, so it works whether you run from the repo root (`npm run cli`) or from inside `packages/cli`.
 
@@ -111,13 +136,51 @@ modelclash config unset <key>
 
 Settable keys: `apiKeys.<provider>`, `defaultModels.<provider>`, `defaults.temperature`, `defaults.timeoutMs`, `defaults.stream`, `aliases.<name>.<provider>`.
 
-### Running Ollama in Docker
+### Running the full web stack in Docker
 
-If you don't want to install Ollama natively, use the bundled `docker-compose.yml`:
+The bundled `docker-compose.yml` brings up **Postgres + NestJS API + Nuxt UI + Ollama** together:
+
+```bash
+# Start everything (Postgres, server :3001, web :3000, Ollama :11434)
+docker compose up -d
+# or:
+npm run docker:up
+
+# Tail backend + frontend logs
+npm run docker:logs
+
+# Stop (keeps volumes)
+npm run docker:down
+```
+
+Once up, open <http://localhost:3000> for the web UI. The API is at <http://localhost:3001/api>.
+
+Ports exposed on the host:
+
+| Service  | Host port    | Notes                                              |
+|----------|--------------|----------------------------------------------------|
+| Web      | `3000`       | Nuxt UI                                            |
+| Server   | `3001`       | NestJS REST + SSE                                  |
+| Postgres | `5433`       | Maps to container `5432` to avoid clashing with a local Postgres instance |
+| Ollama   | `11434`      | Local model runtime                                |
+
+#### Configuring providers from the UI
+
+1. Open <http://localhost:3000>.
+2. Click the **gear icon** at the bottom of the sidebar → *Settings*.
+3. For each cloud provider (OpenAI, Anthropic, Google, Groq, DeepSeek): flip the toggle on, paste an API key, and pick a model from the dropdown.
+4. For **Ollama**: just flip the toggle on — the server auto-uses `http://ollama:11434/v1` inside the docker network (override with the `OLLAMA_URL` env var on the `server` service). Pick a model that's actually pulled (default compose pulls `llama3.2`).
+5. Hit **Save Settings**. Subsequent chat requests use whatever's saved in Postgres — no rebuild needed.
+
+The sidebar's bottom area also has a **light/dark toggle** (sun/moon icon).
+
+### Running Ollama-only in Docker
+
+If you only want Ollama (no server / web), start just that service:
 
 ```bash
 # Start Ollama + auto-pull the default model (llama3.2)
-docker compose up -d
+docker compose up -d ollama ollama-pull
 
 # Pull additional models on demand
 OLLAMA_MODELS="qwen2.5 llama3.1" docker compose run --rm ollama-pull
@@ -154,14 +217,21 @@ All commands run from the repo root.
 | What you want to do                      | Command                              |
 | ---------------------------------------- | ------------------------------------ |
 | Install deps                             | `npm install`                        |
-| Build all packages                       | `npm run build`                      |
+| Build all packages (core + CLI)          | `npm run build`                      |
+| Build server (core + NestJS)             | `npm run build:server`               |
+| Build web (Nuxt)                         | `npm run build:web`                  |
 | Run the built CLI                        | `npm run cli -- <args>`              |
 | Run the CLI from TS source (no build)    | `npm run cli:dev -- <args>`          |
-| Build only the CLI workspace             | `npm run cli:build`                  |
+| Run NestJS server in watch mode          | `npm run dev:server`                 |
+| Run Nuxt frontend in dev mode            | `npm run dev:web`                    |
+| Start built NestJS server                | `npm run start:server`               |
 | Run tests once                           | `npm test`                           |
 | Run tests in watch mode                  | `npm run test:watch`                 |
 | Typecheck the whole monorepo             | `npm run typecheck`                  |
 | Clean build outputs                      | `npm run clean`                      |
+| Bring up full Docker stack               | `npm run docker:up`                  |
+| Stop the Docker stack                    | `npm run docker:down`                |
+| Tail server + web Docker logs            | `npm run docker:logs`                |
 
 The `--` separates npm flags from CLI flags, e.g.:
 
@@ -346,11 +416,25 @@ packages/
   core/                     # @modelclash/core — providers, pricing, retry, cost, orchestrator
     src/providers/          # openai, anthropic, google, groq, openai-compatible (deepseek + ollama)
   cli/                      # modelclash — CLI entrypoint, chat REPL, config command
-  server/                   # (optional) HTTP wrapper
+  server/                   # @modelclash/server — NestJS HTTP API (chat, settings, llm), Postgres via TypeORM
+    src/chat/               #   sessions, messages, SSE streaming
+    src/settings/           #   provider_settings (API keys + model + enabled) in Postgres
+    src/llm/                #   bridges core providers using settings from DB
+  web/                      # @modelclash/web — Nuxt 3 + Tailwind + Pinia chat UI
+    components/
+      AppSidebar.vue        #   collapsible sidebar (sessions, theme, settings)
+      ChatInput.vue         #   composer with streaming-aware send button
+      MessageBubble.vue     #   user / assistant / error bubble with theme-aware colors
+      ModelSelect.vue       #   styled per-provider model dropdown
+      SettingsModal.vue     #   API keys + model picker (writes to DB via /api/settings)
+      StreamingBubble.vue   #   per-provider live streaming bubble
+    composables/
+      useApi.ts             #   fetch wrapper + SSE parser
+      useTheme.ts           #   light / dark / system, persisted in localStorage
 .github/
   workflows/
     ci.yml                  # PR + main: build & test on Node 18/20/22
-docker-compose.yml          # Ollama service with auto model pull
+docker-compose.yml          # Full stack: postgres (host 5433) + server + web + ollama
 Dockerfile.ollama           # single image with models baked in
 .env.example                # template for environment configuration
 ```

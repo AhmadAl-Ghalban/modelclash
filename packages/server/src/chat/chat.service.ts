@@ -7,7 +7,7 @@ import { ChatMessage } from './entities/chat-message.entity.js';
 import { CreateSessionDto } from './dto/create-session.dto.js';
 import { SendMessageDto } from './dto/send-message.dto.js';
 import { UpdateSessionDto } from './dto/update-session.dto.js';
-import { LlmService } from '../llm/llm.service.js';
+import { LlmService, CoreProviderResult } from '../llm/llm.service.js';
 
 @Injectable()
 export class ChatService {
@@ -120,23 +120,37 @@ export class ChatService {
       historyForLlm.slice(0, -1), // exclude the current user message (it's in prompt)
       dto.providers,
       (provider, chunk) => sendEvent('chunk', { provider, text: chunk }),
-      async (result) => {
-        const msg = await this.messageRepo.save(
-          this.messageRepo.create({
+      async (result: CoreProviderResult) => {
+        let fields;
+        if (result.ok) {
+          const v = result.value;
+          fields = {
             sessionId,
-            role: result.ok ? 'assistant' : 'error',
-            content: result.ok ? result.value.text : result.error.message,
-            provider: result.ok ? result.value.provider : result.error.provider,
-            model: result.ok ? result.value.model : result.error.model,
-            costUsd: result.ok ? result.value.costUsd : undefined,
-            tokens: result.ok ? result.value.usage.total : undefined,
-            durationMs: result.ok ? result.value.durationMs : result.error.durationMs,
-          }),
-        );
-        savedMessages.push(msg);
-        if (!result.ok) {
-          sendEvent('providerError', { provider: result.error.provider, message: result.error.message });
+            role: 'assistant' as const,
+            content: v.text,
+            provider: v.provider,
+            model: v.model,
+            costUsd: v.costUsd,
+            tokens: v.usage.total,
+            durationMs: v.durationMs,
+          };
+        } else {
+          const e = (result as Extract<CoreProviderResult, { ok: false }>).error;
+          fields = {
+            sessionId,
+            role: 'error' as const,
+            content: e.message,
+            provider: e.provider,
+            model: e.model,
+            costUsd: undefined,
+            tokens: undefined,
+            durationMs: e.durationMs,
+          };
+          sendEvent('providerError', { provider: e.provider, message: e.message });
         }
+        const entity = this.messageRepo.create(fields as Partial<ChatMessage>);
+        const msg = await this.messageRepo.save(entity);
+        savedMessages.push(msg);
       },
     );
 

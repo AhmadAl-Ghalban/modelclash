@@ -1,5 +1,5 @@
 <template>
-  <aside class="flex flex-col w-72 min-h-screen bg-slate-900 border-r border-slate-800">
+  <aside class="flex flex-col w-72 min-h-screen bg-slate-50 dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800">
     <!-- Header -->
     <div class="px-4 pt-5 pb-3">
       <div class="flex items-center justify-between mb-4">
@@ -10,16 +10,27 @@
                 d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <span class="text-sm font-semibold text-white tracking-tight">ModelClash</span>
+          <span class="text-sm font-semibold text-slate-900 dark:text-white tracking-tight">ModelClash</span>
         </div>
+        <button
+          @click="$emit('toggle')"
+          class="p-1.5 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+          title="Hide sidebar"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+          </svg>
+        </button>
       </div>
       <button
         @click="$emit('newChat')"
-        class="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-300 hover:text-white
-          bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-slate-600
+        class="w-full flex items-center gap-2 px-3 py-2 text-sm text-slate-700 dark:text-slate-300
+          hover:text-violet-700 dark:hover:text-violet-200
+          bg-slate-100 dark:bg-slate-800 hover:bg-violet-50 dark:hover:bg-violet-500/10
+          border border-slate-200 dark:border-slate-700 hover:border-violet-300 dark:hover:border-violet-500/30
           rounded-xl transition-all duration-150 group"
       >
-        <svg class="w-4 h-4 text-slate-400 group-hover:text-violet-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4 text-slate-500 dark:text-slate-400 group-hover:text-violet-600 dark:group-hover:text-violet-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
         </svg>
         New Chat
@@ -29,7 +40,7 @@
     <!-- Session list -->
     <div class="flex-1 overflow-y-auto px-3 space-y-0.5 pb-2">
       <div v-if="store.isLoadingSessions" class="flex items-center justify-center py-8">
-        <div class="w-5 h-5 border-2 border-slate-600 border-t-violet-500 rounded-full animate-spin" />
+        <div class="w-5 h-5 border-2 border-slate-300 dark:border-slate-600 border-t-violet-500 rounded-full animate-spin" />
       </div>
 
       <p v-else-if="store.sessions.length === 0" class="text-xs text-slate-500 text-center py-8 px-2">
@@ -42,8 +53,8 @@
           :key="session.id"
           class="group relative flex items-center rounded-xl px-3 py-2.5 cursor-pointer transition-all duration-150"
           :class="session.id === store.activeSessionId
-            ? 'bg-slate-700 text-white'
-            : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'"
+            ? 'bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-100'
+            : 'text-slate-600 dark:text-slate-400 hover:text-violet-700 dark:hover:text-violet-200 hover:bg-violet-50 dark:hover:bg-violet-500/10'"
           @click="$emit('selectSession', session.id)"
         >
           <div class="flex-1 min-w-0">
@@ -69,12 +80,31 @@
       </template>
     </div>
 
-    <!-- Footer: Settings button -->
-    <div class="px-3 pb-4 pt-2 border-t border-slate-800">
+    <!-- Footer: Theme toggle + Settings button -->
+    <div class="px-3 pb-4 pt-2 border-t border-slate-200 dark:border-slate-800 space-y-1">
+      <button
+        @click="theme.toggle()"
+        class="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-600 dark:text-slate-400
+          hover:text-violet-700 dark:hover:text-violet-200
+          hover:bg-violet-50 dark:hover:bg-violet-500/10
+          rounded-xl transition-all duration-150"
+      >
+        <svg v-if="theme.isDark()" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m12.728 0l-.707-.707M6.343 6.343l-.707-.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+        <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+        {{ theme.isDark() ? 'Light mode' : 'Dark mode' }}
+      </button>
       <button
         @click="$emit('openSettings')"
-        class="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-400 hover:text-white
-          hover:bg-slate-800 rounded-xl transition-all duration-150 group"
+        class="w-full flex items-center gap-3 px-3 py-2.5 text-sm text-slate-600 dark:text-slate-400
+          hover:text-violet-700 dark:hover:text-violet-200
+          hover:bg-violet-50 dark:hover:bg-violet-500/10
+          rounded-xl transition-all duration-150 group"
       >
         <svg class="w-4 h-4 group-hover:rotate-45 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -92,12 +122,14 @@
 import { useChatStore } from '~/stores/chat'
 
 const store = useChatStore()
+const theme = useTheme()
 
 defineEmits<{
   newChat: []
   selectSession: [id: string]
   deleteSession: [id: string]
   openSettings: []
+  toggle: []
 }>()
 
 function formatDate(dateStr: string) {

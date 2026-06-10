@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { SettingsService } from '../settings/settings.service.js';
 
-type CoreProviderResult = {
+export type CoreProviderResult = {
   ok: true;
   value: {
     provider: string;

@@ -1,6 +1,6 @@
 import {
   Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
-  ManyToOne, JoinColumn,
+  ManyToOne, JoinColumn, Relation,
 } from 'typeorm';
 import { ChatSession } from './chat-session.entity.js';
 
@@ -14,7 +14,7 @@ export class ChatMessage {
 
   @ManyToOne(() => ChatSession, (session) => session.messages, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'sessionId' })
-  session: ChatSession;
+  session: Relation<ChatSession>;
 
   @Column({ type: 'varchar' })
   role: 'user' | 'assistant' | 'error';

@@ -11,6 +11,7 @@ COPY packages/web/package.json     ./packages/web/
 RUN npm ci
 
 # Build @modelclash/core first (server depends on it at runtime)
+COPY tsconfig.base.json ./
 COPY packages/core/ ./packages/core/
 RUN npm run build -w @modelclash/core
 
@@ -23,9 +24,10 @@ FROM node:20-alpine
 WORKDIR /app
 
 # Reuse node_modules from builder (avoids a second npm ci + keeps image lean)
-COPY --from=builder /app/node_modules         ./node_modules
-COPY --from=builder /app/packages/core/dist   ./packages/core/dist
-COPY --from=builder /app/packages/server/dist ./packages/server/dist
+COPY --from=builder /app/node_modules                  ./node_modules
+COPY --from=builder /app/packages/server/node_modules  ./packages/server/node_modules
+COPY --from=builder /app/packages/core/dist            ./packages/core/dist
+COPY --from=builder /app/packages/server/dist          ./packages/server/dist
 
 # Minimal package files needed for Node workspace resolution at runtime
 COPY package.json ./
