@@ -6,3 +6,8 @@ dist/
 .DS_Store
 .vite/
 coverage/
+
+# Nuxt
+.nuxt/
+.output/
+.nitro/
