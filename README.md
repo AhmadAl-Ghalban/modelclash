@@ -27,10 +27,15 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
   - Per-turn comparison table with fastest / cheapest / longest / highest tok/s badges
 - Bundled Docker setup for running Ollama locally
 - **Web UI + HTTP API** — NestJS backend (`packages/server`) with Postgres-backed chat history & provider settings, plus a Nuxt 3 frontend (`packages/web`) with:
-  - ChatGPT-style **collapsible sidebar** with session list, hover + active accents
+  - **Side-by-side comparison grid** — every provider's answer to one prompt sits in an equal-height card, with tokens / cost / latency aligned in a footer row you can scan across
+  - **Responsive shell** — inline sidebar on desktop, overlay drawer with scrim on phones (Escape or tap-outside closes it); usable from 320px up
   - **Light / dark theme toggle** (persists in `localStorage`, defaults to system preference)
-  - **Settings modal** for all 6 providers — toggle, masked API-key input, and a curated **model dropdown** per provider (with "+ custom model" fallback). Keys are persisted in Postgres, not the browser
-  - Streaming SSE chat with parallel responses per provider
+  - **Providers dialog** for all 6 providers — toggle, masked API-key input with show/hide, and a curated **model dropdown** per provider (with "+ custom model" fallback). Keys are persisted in Postgres, not the browser
+  - Streaming SSE chat with parallel responses per provider, each with a live skeleton until its first token
+  - **Real empty, loading and error states** — layout-matched skeletons instead of spinners, one-click example prompts, a "no providers set up" path into the dialog, and human-readable failures with a retry
+  - **Undo on delete** instead of a confirmation dialog
+  - **Accessible by default** — visible focus rings, keyboard-navigable dialog with a focus trap, labelled controls, `prefers-reduced-motion` honoured, no meaning carried by colour alone
+- **MCP server** (`modelclash-mcp`) exposing `compare_models`, `list_providers`, and `estimate_cost` to any MCP client (Claude Code, Claude Desktop, …)
 - One-command full stack via `docker compose up -d` (Postgres + NestJS + Nuxt + Ollama)
 - TypeScript strict mode, Vitest unit tests, npm workspaces monorepo
 
@@ -217,14 +222,17 @@ All commands run from the repo root.
 | What you want to do                      | Command                              |
 | ---------------------------------------- | ------------------------------------ |
 | Install deps                             | `npm install`                        |
-| Build all packages (core + CLI)          | `npm run build`                      |
+| Build all packages (core + CLI + MCP)    | `npm run build`                      |
 | Build server (core + NestJS)             | `npm run build:server`               |
 | Build web (Nuxt)                         | `npm run build:web`                  |
+| Build MCP server (core + MCP)            | `npm run build:mcp`                  |
 | Run the built CLI                        | `npm run cli -- <args>`              |
 | Run the CLI from TS source (no build)    | `npm run cli:dev -- <args>`          |
 | Run NestJS server in watch mode          | `npm run dev:server`                 |
 | Run Nuxt frontend in dev mode            | `npm run dev:web`                    |
 | Start built NestJS server                | `npm run start:server`               |
+| Start MCP server on stdio                | `npm run start:mcp`                  |
+| Run MCP server from TS source            | `npm run dev:mcp`                    |
 | Run tests once                           | `npm test`                           |
 | Run tests in watch mode                  | `npm run test:watch`                 |
 | Typecheck the whole monorepo             | `npm run typecheck`                  |
@@ -240,6 +248,13 @@ npm run cli -- --help
 npm run cli:dev -- chat
 npm run cli -- "Write a haiku about Mondays" --temperature 0.9
 ```
+
+### Toolchain notes
+
+Two constraints in the web build are load-bearing and easy to undo by accident:
+
+- **`vite` is pinned at the repo root (`^7.3.3`).** Nuxt's builder needs the same Vite *instance* as `@vitejs/plugin-vue`. Without the root pin, Vitest hoists Vite 5 to the root, the plugin binds to that copy, and `nuxt dev` fails with `No entry found in rollupOptions.input`. Vitest keeps its own nested Vite 5 — that is expected.
+- **`packages/web` does not set `ssr: false`.** It hits the same builder bug in Nuxt 3.21. All data is fetched client-side anyway, so rendering the static shell on the server costs nothing and improves first paint.
 
 ### Install globally (optional)
 
@@ -416,20 +431,26 @@ packages/
   core/                     # @modelclash/core — providers, pricing, retry, cost, orchestrator
     src/providers/          # openai, anthropic, google, groq, openai-compatible (deepseek + ollama)
   cli/                      # modelclash — CLI entrypoint, chat REPL, config command
+  mcp/                      # @modelclash/mcp — MCP stdio server (compare_models, list_providers, estimate_cost)
   server/                   # @modelclash/server — NestJS HTTP API (chat, settings, llm), Postgres via TypeORM
     src/chat/               #   sessions, messages, SSE streaming
     src/settings/           #   provider_settings (API keys + model + enabled) in Postgres
     src/llm/                #   bridges core providers using settings from DB
   web/                      # @modelclash/web — Nuxt 3 + Tailwind + Pinia chat UI
+    assets/css/main.css     #   design tokens, global focus ring, skeleton, reduced-motion
+    tailwind.config.ts      #   brand palette, elevation, motion + `xs` breakpoint
     components/
-      AppSidebar.vue        #   collapsible sidebar (sessions, theme, settings)
-      ChatInput.vue         #   composer with streaming-aware send button
-      MessageBubble.vue     #   user / assistant / error bubble with theme-aware colors
-      ModelSelect.vue       #   styled per-provider model dropdown
-      SettingsModal.vue     #   API keys + model picker (writes to DB via /api/settings)
-      StreamingBubble.vue   #   per-provider live streaming bubble
+      AppSidebar.vue        #   sessions, provider status, theme toggle
+      ChatInput.vue         #   composer; blocked with a reason when no provider is set up
+      MessageBubble.vue     #   user turn, or one model's response card (metrics footer + copy)
+      ModelSelect.vue       #   combobox model picker, arrow-key navigable
+      ProviderBadge.vue     #   the coloured provider initial, shared by every view
+      SettingsModal.vue     #   focus-trapped providers dialog (writes to DB via /api/settings)
+      StreamingBubble.vue   #   per-provider live response, skeleton until the first token
     composables/
-      useApi.ts             #   fetch wrapper + SSE parser
+      useApi.ts             #   fetch wrapper + SSE parser; failures become human sentences
+      useFormat.ts          #   token / cost / duration / relative-time formatting
+      useProviderMeta.ts    #   single source of truth for provider labels + colours
       useTheme.ts           #   light / dark / system, persisted in localStorage
 .github/
   workflows/
@@ -438,6 +459,59 @@ docker-compose.yml          # Full stack: postgres (host 5433) + server + web + 
 Dockerfile.ollama           # single image with models baked in
 .env.example                # template for environment configuration
 ```
+
+## MCP server
+
+`@modelclash/mcp` exposes modelclash over the [Model Context Protocol](https://modelcontextprotocol.io), so any MCP client can fan a prompt out across providers and get usage + cost back.
+
+### Tools
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `compare_models` | `prompt` (required), `providers[]`, `history[]`, `temperature`, `timeoutMs` | Each provider's answer plus tokens, estimated cost, and latency |
+| `list_providers` | — | All six providers, whether each has credentials, and the model that would be used |
+| `estimate_cost` | `model`, `inputTokens`, `outputTokens` | USD estimate from the built-in pricing table |
+
+Every tool also returns `structuredContent`, so clients that support structured tool output get typed results instead of parsing the text.
+
+### Configuration
+
+The server reads the **same** credentials as the CLI — environment variables first, then `~/.modelclash/config.json` (see [Configuration](#configuration)). Config is re-read on every call, so `modelclash config set …` takes effect without restarting the server. `compare_models` queries every configured provider unless you pass `providers`.
+
+### Run it
+
+```bash
+npm run build:mcp     # build @modelclash/core + @modelclash/mcp
+npm run start:mcp     # serve on stdio
+npm run dev:mcp       # run from TypeScript source, no build step
+```
+
+### Register with a client
+
+Claude Code:
+
+```bash
+claude mcp add modelclash -- node /absolute/path/to/cli-firebox/packages/mcp/dist/index.js
+```
+
+Claude Desktop — add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "modelclash": {
+      "command": "node",
+      "args": ["/absolute/path/to/cli-firebox/packages/mcp/dist/index.js"],
+      "env": {
+        "OPENAI_API_KEY": "sk-...",
+        "ANTHROPIC_API_KEY": "sk-ant-..."
+      }
+    }
+  }
+}
+```
+
+Use absolute paths — clients do not launch the server from this repo's directory. The transport is stdio, so the server writes **only** protocol messages to stdout; diagnostics go to stderr.
 
 ## Continuous Integration
 

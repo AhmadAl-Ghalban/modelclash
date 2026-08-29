@@ -1,41 +1,56 @@
 <template>
-  <div class="flex justify-start">
-    <div class="max-w-[85%] w-full">
-      <div class="bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl rounded-tl-sm overflow-hidden">
-        <!-- Provider header -->
-        <div class="flex items-center gap-2 px-4 py-2 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-850">
-          <div class="w-5 h-5 rounded flex items-center justify-center text-[10px] font-bold"
-            :class="providerColor(provider)">
-            {{ provider[0].toUpperCase() }}
-          </div>
-          <span class="text-xs font-medium text-slate-500 dark:text-slate-400 capitalize">{{ provider }}</span>
-          <div class="ml-auto">
-            <div v-if="!text" class="flex gap-1">
-              <span class="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style="animation-delay:0ms" />
-              <span class="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style="animation-delay:150ms" />
-              <span class="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style="animation-delay:300ms" />
-            </div>
-            <span v-else class="w-2 h-4 bg-violet-400 animate-pulse inline-block rounded-sm" />
-          </div>
-        </div>
-        <!-- Streaming text -->
-        <div class="px-4 py-3 text-sm text-slate-800 dark:text-slate-200 leading-relaxed whitespace-pre-wrap min-h-[40px]">
-          {{ text || '' }}
-        </div>
-      </div>
+  <article
+    class="h-full flex flex-col rounded-card border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden"
+  >
+    <header
+      class="flex items-center gap-2 px-4 py-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-850"
+    >
+      <ProviderBadge :provider="provider" />
+      <p class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">
+        {{ meta(provider).label }}
+      </p>
+      <span class="ml-auto flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+        {{ text ? 'Writing…' : 'Thinking…' }}
+        <span class="relative flex w-1.5 h-1.5">
+          <span
+            class="absolute inline-flex w-full h-full rounded-full bg-brand-400 opacity-75 motion-safe:animate-ping"
+          />
+          <span class="relative inline-flex w-1.5 h-1.5 rounded-full bg-brand-500" />
+        </span>
+      </span>
+    </header>
+
+    <!--
+      Partial output is announced politely rather than assertively: a screen
+      reader should not re-read the whole answer on every token.
+    -->
+    <div
+      class="px-4 py-3 text-[15px] leading-relaxed text-slate-800 dark:text-slate-200 whitespace-pre-wrap break-words flex-1 min-h-[3.5rem]"
+      aria-live="polite"
+      aria-busy="true"
+      :aria-label="`${meta(provider).label} is responding`"
+    >
+      <template v-if="text">{{ text }}</template>
+      <!-- Skeleton lines while the first token is still in flight. -->
+      <template v-else>
+        <span class="sr-only">Waiting for the first response…</span>
+        <span aria-hidden="true" class="block space-y-2">
+          <span class="skeleton block h-3 w-11/12" />
+          <span class="skeleton block h-3 w-4/5" />
+          <span class="skeleton block h-3 w-2/3" />
+        </span>
+      </template>
+      <span
+        v-if="text"
+        class="inline-block w-[2px] h-4 align-[-2px] ml-0.5 bg-brand-500 motion-safe:animate-pulse"
+        aria-hidden="true"
+      />
     </div>
-  </div>
+  </article>
 </template>
 
 <script setup lang="ts">
 defineProps<{ provider: string; text: string }>()
 
-const providerColor = (p: string) => ({
-  openai: 'bg-emerald-500/20 text-emerald-400',
-  anthropic: 'bg-orange-500/20 text-orange-400',
-  google: 'bg-blue-500/20 text-blue-400',
-  groq: 'bg-purple-500/20 text-purple-400',
-  deepseek: 'bg-cyan-500/20 text-cyan-400',
-  ollama: 'bg-gray-500/20 text-gray-400',
-}[p] || 'bg-slate-500/20 text-slate-500 dark:text-slate-400')
+const { meta } = useProviderMeta()
 </script>

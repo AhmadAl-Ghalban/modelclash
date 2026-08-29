@@ -17,6 +17,8 @@ interface _GlobalComponents {
   AppSidebar: typeof import("../../components/AppSidebar.vue")['default']
   ChatInput: typeof import("../../components/ChatInput.vue")['default']
   MessageBubble: typeof import("../../components/MessageBubble.vue")['default']
+  ModelSelect: typeof import("../../components/ModelSelect.vue")['default']
+  ProviderBadge: typeof import("../../components/ProviderBadge.vue")['default']
   SettingsModal: typeof import("../../components/SettingsModal.vue")['default']
   StreamingBubble: typeof import("../../components/StreamingBubble.vue")['default']
   NuxtWelcome: typeof import("../../../../node_modules/nuxt/dist/app/components/welcome.vue")['default']
@@ -45,6 +47,8 @@ interface _GlobalComponents {
   LazyAppSidebar: LazyComponent<typeof import("../../components/AppSidebar.vue")['default']>
   LazyChatInput: LazyComponent<typeof import("../../components/ChatInput.vue")['default']>
   LazyMessageBubble: LazyComponent<typeof import("../../components/MessageBubble.vue")['default']>
+  LazyModelSelect: LazyComponent<typeof import("../../components/ModelSelect.vue")['default']>
+  LazyProviderBadge: LazyComponent<typeof import("../../components/ProviderBadge.vue")['default']>
   LazySettingsModal: LazyComponent<typeof import("../../components/SettingsModal.vue")['default']>
   LazyStreamingBubble: LazyComponent<typeof import("../../components/StreamingBubble.vue")['default']>
   LazyNuxtWelcome: LazyComponent<typeof import("../../../../node_modules/nuxt/dist/app/components/welcome.vue")['default']>

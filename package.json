@@ -2,20 +2,23 @@
   "name": "modelclash-monorepo",
   "version": "1.0.0",
   "private": true,
-  "description": "modelclash — compare responses from OpenAI, Anthropic, and Google models side-by-side",
+  "description": "modelclash \u2014 compare responses from OpenAI, Anthropic, and Google models side-by-side",
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @modelclash/core && npm run build -w modelclash",
+    "build": "npm run build -w @modelclash/core && npm run build -w modelclash && npm run build -w @modelclash/mcp",
+    "build:mcp": "npm run build -w @modelclash/core && npm run build -w @modelclash/mcp",
     "build:server": "npm run build -w @modelclash/core && npm run build -w @modelclash/server",
     "build:web": "npm run build -w @modelclash/web",
     "dev": "npm run dev --workspace @modelclash/cli",
     "dev:server": "npm run start:dev --workspace @modelclash/server",
+    "dev:mcp": "npm run dev --workspace @modelclash/mcp",
     "dev:web": "npm run dev --workspace @modelclash/web",
     "start": "npm run start --workspace @modelclash/cli",
     "start:server": "npm run start --workspace @modelclash/server",
+    "start:mcp": "npm run start --workspace @modelclash/mcp",
     "cli": "npm run start --workspace modelclash --",
     "cli:dev": "npm run dev --workspace modelclash --",
     "cli:build": "npm run build --workspace modelclash",
@@ -44,6 +47,7 @@
     "@types/node": "^22.10.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "vite": "^7.3.3",
     "vitest": "^2.1.8"
   },
   "engines": {

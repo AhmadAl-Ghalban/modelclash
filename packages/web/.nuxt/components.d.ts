@@ -17,6 +17,8 @@ type LazyComponent<T> = DefineComponent<HydrationStrategies, {}, {}, {}, {}, {},
 export const AppSidebar: typeof import("../components/AppSidebar.vue")['default']
 export const ChatInput: typeof import("../components/ChatInput.vue")['default']
 export const MessageBubble: typeof import("../components/MessageBubble.vue")['default']
+export const ModelSelect: typeof import("../components/ModelSelect.vue")['default']
+export const ProviderBadge: typeof import("../components/ProviderBadge.vue")['default']
 export const SettingsModal: typeof import("../components/SettingsModal.vue")['default']
 export const StreamingBubble: typeof import("../components/StreamingBubble.vue")['default']
 export const NuxtWelcome: typeof import("../../../node_modules/nuxt/dist/app/components/welcome.vue")['default']
@@ -45,6 +47,8 @@ export const NuxtIsland: typeof import("../../../node_modules/nuxt/dist/app/comp
 export const LazyAppSidebar: LazyComponent<typeof import("../components/AppSidebar.vue")['default']>
 export const LazyChatInput: LazyComponent<typeof import("../components/ChatInput.vue")['default']>
 export const LazyMessageBubble: LazyComponent<typeof import("../components/MessageBubble.vue")['default']>
+export const LazyModelSelect: LazyComponent<typeof import("../components/ModelSelect.vue")['default']>
+export const LazyProviderBadge: LazyComponent<typeof import("../components/ProviderBadge.vue")['default']>
 export const LazySettingsModal: LazyComponent<typeof import("../components/SettingsModal.vue")['default']>
 export const LazyStreamingBubble: LazyComponent<typeof import("../components/StreamingBubble.vue")['default']>
 export const LazyNuxtWelcome: LazyComponent<typeof import("../../../node_modules/nuxt/dist/app/components/welcome.vue")['default']>

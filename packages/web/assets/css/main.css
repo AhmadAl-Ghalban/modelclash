@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply antialiased;
+  }
+
+  /*
+   * A visible focus ring is the difference between a keyboard-usable app and an
+   * unusable one. Applied globally so no component can forget it; `:focus-visible`
+   * keeps it off for mouse users.
+   */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-white dark:ring-offset-slate-950 rounded-md;
+  }
+
+  /* Scrollbars that don't fight the dark theme. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.slate.300') transparent;
+  }
+
+  .dark * {
+    scrollbar-color: theme('colors.slate.700') transparent;
+  }
+}
+
+@layer components {
+  /*
+   * Shared button skeleton. Components add their own color; this guarantees the
+   * five interactive states (default / hover / pressed / focus / disabled) and a
+   * 44px-tall touch target on coarse pointers.
+   */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl text-sm font-medium
+      transition-all duration-150 ease-emphasized
+      active:scale-[0.98]
+      disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-500 active:bg-brand-700;
+  }
+
+  .btn-ghost {
+    @apply btn text-slate-600 dark:text-slate-400
+      hover:text-slate-900 dark:hover:text-white
+      hover:bg-slate-100 dark:hover:bg-slate-800;
+  }
+
+  .field {
+    @apply w-full rounded-lg border px-3 py-2 text-sm transition-colors
+      bg-white dark:bg-slate-800
+      border-slate-300 dark:border-slate-600
+      text-slate-900 dark:text-white
+      placeholder:text-slate-400 dark:placeholder:text-slate-500
+      focus:border-brand-500 dark:focus:border-brand-500;
+  }
+
+  /* Layout-matched loading placeholder — never a bare spinner for content. */
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-slate-200/80 dark:bg-slate-800;
+  }
+
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full animate-shimmer;
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      theme('colors.slate.100 / 60%'),
+      transparent
+    );
+  }
+
+  .dark .skeleton::after {
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      theme('colors.slate.700 / 50%'),
+      transparent
+    );
+  }
+}
+
+/*
+ * Users who ask their OS for less motion get none of it. Kept as a plain media
+ * query so it also covers third-party markup and Vue transitions.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
