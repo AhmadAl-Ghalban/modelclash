@@ -180,7 +180,7 @@ Ports exposed on the host:
 1. Open <http://localhost:3000>.
 2. Click the **gear icon** at the bottom of the sidebar → *Settings*.
 3. For each cloud provider (OpenAI, Anthropic, Google, Groq, DeepSeek): flip the toggle on, paste an API key, and pick a model from the dropdown.
-4. For **Ollama**: just flip the toggle on — the server auto-uses `http://ollama:11434/v1` inside the docker network (override with the `OLLAMA_URL` env var on the `server` service). Pick a model that's actually pulled (default compose pulls `llama3.2`).
+4. For **Ollama**: nothing to do — it needs no API key and is on by default. Inside the docker network the server reaches it at `http://ollama:11434/v1` (set by `OLLAMA_URL` on the `server` service in `docker-compose.yml`); running natively it defaults to `http://localhost:11434/v1`. The model dropdown lists whatever you have actually pulled (default compose pulls `llama3.2`).
 5. Hit **Save Settings**. Subsequent chat requests use whatever's saved in Postgres — no rebuild needed.
 
 The sidebar's bottom area also has a **light/dark toggle** (sun/moon icon).
