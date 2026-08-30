@@ -27,6 +27,8 @@ export interface ProviderRequest {
   stream?: boolean;
   timeoutMs?: number;
   reasoningEffort?: ReasoningEffort;
+  /** Output cap. Defaults to DEFAULT_MAX_TOKENS — see that constant for why. */
+  maxTokens?: number;
 }
 
 export interface ProviderResponse {

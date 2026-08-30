@@ -5,6 +5,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
+import { DEFAULT_MAX_TOKENS } from "../config/catalog.js";
 import { estimateCost } from "../utils/cost.js";
 import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 
@@ -57,7 +58,7 @@ export class AnthropicProvider implements LLMProvider {
     const call = () =>
       this.client.messages.create({
         model: req.model,
-        max_tokens: 4096,
+        max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
         temperature: req.temperature,
         messages: [
         ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),
@@ -100,7 +101,7 @@ export class AnthropicProvider implements LLMProvider {
 
     const stream = this.client.messages.stream({
       model: req.model,
-      max_tokens: 4096,
+      max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
       temperature: req.temperature,
       messages: [
         ...(req.history ?? []).map((m) => ({ role: m.role, content: m.content })),

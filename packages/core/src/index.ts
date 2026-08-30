@@ -16,6 +16,7 @@ export { PRICING, DEFAULT_PRICING } from "./config/pricing.js";
 export {
   MODEL_CATALOG,
   PROVIDER_NAMES,
+  DEFAULT_MAX_TOKENS,
   MODELS_WITH_EFFORT,
   requiresKey,
   findModel,

@@ -5,6 +5,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
+import { DEFAULT_MAX_TOKENS } from "../config/catalog.js";
 import { estimateCost } from "../utils/cost.js";
 import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 
@@ -51,7 +52,10 @@ export class GoogleProvider implements LLMProvider {
       this.client.models.generateContent({
         model: req.model,
         contents,
-        config: { temperature: req.temperature },
+        config: {
+          temperature: req.temperature,
+          maxOutputTokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+        },
       });
 
     const res = await retryWithBackoff(() =>
@@ -84,7 +88,10 @@ export class GoogleProvider implements LLMProvider {
     const stream = await this.client.models.generateContentStream({
       model: req.model,
       contents: buildGoogleContents(req),
-      config: { temperature: req.temperature },
+      config: {
+          temperature: req.temperature,
+          maxOutputTokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+        },
     });
 
     let text = "";

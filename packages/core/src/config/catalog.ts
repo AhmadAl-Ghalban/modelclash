@@ -231,6 +231,18 @@ function FREE(): ModelPricing {
   return { inputPerMTokens: 0, outputPerMTokens: 0 }
 }
 
+/**
+ * Output-token cap sent with every request.
+ *
+ * This must be set explicitly. Providers that ration by tokens-per-minute price
+ * a request as prompt + the *maximum* completion it might produce, so omitting
+ * it reserves the model's entire output window against the quota: Groq rejects
+ * a three-word prompt with `413 request_too_large` for that reason alone.
+ * Comparison answers are short, so a modest cap costs nothing and keeps every
+ * provider inside its per-request budget.
+ */
+export const DEFAULT_MAX_TOKENS = 4096
+
 export const PROVIDER_NAMES = Object.keys(MODEL_CATALOG) as ProviderName[]
 
 /** `{ openai: "gpt-5.6-terra", ... }` — the default model per provider. */
