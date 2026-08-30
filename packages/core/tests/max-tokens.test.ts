@@ -64,3 +64,30 @@ describe("output token cap", () => {
     expect(create.mock.calls[0][0].max_tokens).toBe(128);
   });
 });
+
+/**
+ * Every provider must be able to enumerate its models. GroqProvider is a
+ * separate class from the OpenAI-compatible one and was missed when live
+ * discovery was added, which made a configured Groq key report
+ * "No API key configured".
+ */
+describe("live model discovery", () => {
+  it.each([
+    ["openai", "../src/providers/openai.js", "OpenAIProvider"],
+    ["anthropic", "../src/providers/anthropic.js", "AnthropicProvider"],
+    ["google", "../src/providers/google.js", "GoogleProvider"],
+    ["groq", "../src/providers/groq.js", "GroqProvider"],
+  ])("%s implements listModels", async (_name, path, className) => {
+    const mod = (await import(path)) as Record<string, new (k: string) => unknown>;
+    const provider = new mod[className]("k") as { listModels?: unknown };
+    expect(typeof provider.listModels).toBe("function");
+  });
+
+  it("DeepSeek and Ollama inherit listModels from the compatible provider", async () => {
+    const { DeepSeekProvider, OllamaProvider } = await import(
+      "../src/providers/openai-compatible.js"
+    );
+    expect(typeof new DeepSeekProvider("k").listModels).toBe("function");
+    expect(typeof new OllamaProvider("http://x/v1").listModels).toBe("function");
+  });
+});

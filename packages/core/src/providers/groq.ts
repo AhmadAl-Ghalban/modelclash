@@ -1,6 +1,7 @@
 import Groq from "groq-sdk";
 import type { LLMProvider } from "../interfaces/provider.js";
 import type {
+  ModelInfo,
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
@@ -14,6 +15,16 @@ export class GroqProvider implements LLMProvider {
 
   constructor(apiKey: string) {
     this.client = new Groq({ apiKey });
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    const res = await this.client.models.list();
+    return (res.data ?? [])
+      // Groq hosts Whisper alongside the chat models; only chat models can
+      // answer a prompt.
+      .filter((m) => !/whisper|tts|guard/i.test(m.id))
+      .map((m) => ({ id: m.id }))
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {
