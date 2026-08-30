@@ -4,6 +4,10 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 
 > **Keep this file in sync.** Whenever you add, remove, or change a feature, flag, script, env var, or run step, update the matching section of this README in the **same PR**. CI (see [Continuous Integration](#continuous-integration)) does not check docs — reviewers do.
 
+
+https://github.com/user-attachments/assets/652c3b1e-a9c2-4257-b75f-08ea5123cad2
+
+
 ## Features
 
 - Parallel calls to OpenAI, Anthropic, Google, Groq, DeepSeek, and Ollama (local)
