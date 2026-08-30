@@ -11,8 +11,10 @@ import {
   isSettableKey,
   resolveSettings,
   buildProvidersFromSettings,
+  configuredProvidersFromSettings,
   getConfigPath,
   DEFAULT_MODELS,
+  DEFAULT_OLLAMA_BASE_URL,
 } from "../src/index.js";
 
 let dir: string;
@@ -98,7 +100,24 @@ describe("resolveSettings precedence", () => {
     expect(s.temperature).toBe(0.7);
     expect(s.timeoutMs).toBe(60_000);
     expect(s.stream).toBe(false);
-    expect(buildProvidersFromSettings(s)).toHaveLength(0);
+    // Ollama needs no credential, so it is always available — only the
+    // key-requiring providers are absent here.
+    expect(buildProvidersFromSettings(s).map((p) => p.name)).toEqual(["ollama"]);
+  });
+
+  it("gives Ollama a default local base URL with no configuration at all", () => {
+    const s = resolveSettings({}, {} as NodeJS.ProcessEnv, {});
+    expect(s.apiKeys.ollama).toBe(DEFAULT_OLLAMA_BASE_URL);
+    expect(configuredProvidersFromSettings(s)).toContain("ollama");
+  });
+
+  it("lets an explicit OLLAMA_BASE_URL override the local default", () => {
+    const s = resolveSettings(
+      {},
+      { OLLAMA_BASE_URL: "http://box.local:11434/v1" } as NodeJS.ProcessEnv,
+      {},
+    );
+    expect(s.apiKeys.ollama).toBe("http://box.local:11434/v1");
   });
 
   it("config file fills in API keys and model defaults", () => {
@@ -111,7 +130,10 @@ describe("resolveSettings precedence", () => {
     expect(s.apiKeys.openai).toBe("sk-cfg");
     expect(s.models.openai).toBe("gpt-4o-mini");
     expect(s.temperature).toBe(0.2);
-    expect(buildProvidersFromSettings(s)).toHaveLength(1);
+    expect(buildProvidersFromSettings(s).map((p) => p.name).sort()).toEqual([
+      "ollama",
+      "openai",
+    ]);
   });
 
   it("env overrides config file", () => {

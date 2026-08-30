@@ -2,6 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../src/server.js";
+import { DEFAULT_MODELS } from "@modelclash/core";
 
 const PROVIDER_KEYS = [
   "OPENAI_API_KEY",
@@ -53,23 +54,25 @@ describe("modelclash MCP server", () => {
     ]);
   });
 
-  it("reports every provider as unconfigured when no keys are set", async () => {
+  it("reports key-requiring providers as unconfigured, but Ollama as available", async () => {
     const result = await (await connect()).callTool({
       name: "list_providers",
       arguments: {},
     });
     const providers = (result.structuredContent as any).providers;
     expect(providers).toHaveLength(6);
-    expect(providers.every((p: any) => p.configured === false)).toBe(true);
+    // Ollama is local and needs no credential, so it is always available.
+    const configured = providers.filter((p: any) => p.configured).map((p: any) => p.provider);
+    expect(configured).toEqual(["ollama"]);
     expect(providers.find((p: any) => p.provider === "openai").model).toBe(
-      "gpt-4o",
+      DEFAULT_MODELS.openai,
     );
   });
 
   it("estimates cost from the pricing table", async () => {
     const result = await (await connect()).callTool({
       name: "estimate_cost",
-      arguments: { model: "gpt-4o", inputTokens: 1000, outputTokens: 500 },
+      arguments: { model: DEFAULT_MODELS.openai, inputTokens: 1000, outputTokens: 500 },
     });
     const structured = result.structuredContent as any;
     expect(structured.pricingKnown).toBe(true);
@@ -77,13 +80,25 @@ describe("modelclash MCP server", () => {
     expect(structured.costUsd).toBeGreaterThan(0);
   });
 
-  it("returns a tool error instead of calling out when nothing is configured", async () => {
+  it("reports an unpriced model as unknown rather than free", async () => {
+    const result = await (await connect()).callTool({
+      name: "estimate_cost",
+      arguments: { model: "not-a-real-model", inputTokens: 1000, outputTokens: 500 },
+    });
+    const structured = result.structuredContent as any;
+    expect(structured.pricingKnown).toBe(false);
+    expect(structured.costUsd).toBeNull();
+  });
+
+  it("returns a tool error when the requested providers have no credentials", async () => {
+    // Ollama is always available, so ask for providers that are not — this is
+    // the case that would otherwise send a prompt nowhere.
     const result = await (await connect()).callTool({
       name: "compare_models",
-      arguments: { prompt: "hello" },
+      arguments: { prompt: "hello", providers: ["openai", "anthropic"] },
     });
     expect(result.isError).toBe(true);
-    expect((result.content as any)[0].text).toMatch(/No providers are configured/);
+    expect((result.content as any)[0].text).toMatch(/No credentials configured/);
   });
 
   it("rejects an unknown provider name", async () => {

@@ -4,17 +4,11 @@ import { GoogleProvider } from "../providers/google.js";
 import { GroqProvider } from "../providers/groq.js";
 import { DeepSeekProvider, OllamaProvider } from "../providers/openai-compatible.js";
 import type { LLMProvider } from "../interfaces/provider.js";
-import type { ProviderName } from "../types/index.js";
+import type { ModelInfo, ProviderName } from "../types/index.js";
 import type { ModelclashConfig } from "./schema.js";
+import { DEFAULT_MODELS, MODEL_CATALOG, PROVIDER_NAMES, requiresKey } from "./catalog.js";
 
-export const DEFAULT_MODELS = {
-  openai: "gpt-4o",
-  anthropic: "claude-sonnet-4",
-  google: "gemini-2.5-pro",
-  groq: "llama-3.3-70b-versatile",
-  deepseek: "deepseek-chat",
-  ollama: "llama3.2",
-} as const;
+export { DEFAULT_MODELS };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
 
@@ -49,47 +43,42 @@ export function resolveSettings(
     google: env.GOOGLE_API_KEY ?? config.apiKeys?.google,
     groq: env.GROQ_API_KEY ?? config.apiKeys?.groq,
     deepseek: env.DEEPSEEK_API_KEY ?? config.apiKeys?.deepseek,
-    ollama:
-      env.OLLAMA_BASE_URL ??
-      config.apiKeys?.ollama ??
-      (env.OLLAMA_ENABLED === "1" ? DEFAULT_OLLAMA_BASE_URL : undefined),
+    /*
+     * Ollama runs locally and takes no credential, so this slot holds a base URL
+     * rather than a key — and it always has a value. Earlier versions required
+     * OLLAMA_BASE_URL or OLLAMA_ENABLED=1 before Ollama would appear at all,
+     * which meant a running local daemon was silently ignored. It is now always
+     * built; an unreachable daemon simply fails that one provider's call.
+     */
+    ollama: env.OLLAMA_BASE_URL ?? config.apiKeys?.ollama ?? DEFAULT_OLLAMA_BASE_URL,
   };
 
-  const models: Record<ProviderName, string> = {
-    openai:
-      overrides.modelOpenai ??
-      env.DEFAULT_OPENAI_MODEL ??
-      config.defaultModels?.openai ??
-      DEFAULT_MODELS.openai,
-    anthropic:
-      overrides.modelAnthropic ??
-      env.DEFAULT_ANTHROPIC_MODEL ??
-      config.defaultModels?.anthropic ??
-      DEFAULT_MODELS.anthropic,
-    google:
-      overrides.modelGoogle ??
-      env.DEFAULT_GOOGLE_MODEL ??
-      config.defaultModels?.google ??
-      DEFAULT_MODELS.google,
-    groq:
-      overrides.modelGroq ??
-      env.DEFAULT_GROQ_MODEL ??
-      config.defaultModels?.groq ??
-      DEFAULT_MODELS.groq,
-    deepseek:
-      overrides.modelDeepseek ??
-      env.DEFAULT_DEEPSEEK_MODEL ??
-      config.defaultModels?.deepseek ??
-      DEFAULT_MODELS.deepseek,
-    ollama:
-      overrides.modelOllama ??
-      env.DEFAULT_OLLAMA_MODEL ??
-      config.defaultModels?.ollama ??
-      DEFAULT_MODELS.ollama,
+  const overrideFor: Record<ProviderName, string | undefined> = {
+    openai: overrides.modelOpenai,
+    anthropic: overrides.modelAnthropic,
+    google: overrides.modelGoogle,
+    groq: overrides.modelGroq,
+    deepseek: overrides.modelDeepseek,
+    ollama: overrides.modelOllama,
   };
 
-  const temperature =
-    overrides.temperature ?? config.defaults?.temperature ?? 0.7;
+  const envModelFor: Record<ProviderName, string | undefined> = {
+    openai: env.DEFAULT_OPENAI_MODEL,
+    anthropic: env.DEFAULT_ANTHROPIC_MODEL,
+    google: env.DEFAULT_GOOGLE_MODEL,
+    groq: env.DEFAULT_GROQ_MODEL,
+    deepseek: env.DEFAULT_DEEPSEEK_MODEL,
+    ollama: env.DEFAULT_OLLAMA_MODEL,
+  };
+
+  const models = Object.fromEntries(
+    PROVIDER_NAMES.map((p) => [
+      p,
+      overrideFor[p] ?? envModelFor[p] ?? config.defaultModels?.[p] ?? DEFAULT_MODELS[p],
+    ]),
+  ) as Record<ProviderName, string>;
+
+  const temperature = overrides.temperature ?? config.defaults?.temperature ?? 0.7;
 
   const timeoutMs =
     overrides.timeoutMs ??
@@ -102,9 +91,7 @@ export function resolveSettings(
   return { apiKeys, models, temperature, timeoutMs, stream };
 }
 
-export function buildProvidersFromSettings(
-  settings: ResolvedSettings,
-): LLMProvider[] {
+export function buildProvidersFromSettings(settings: ResolvedSettings): LLMProvider[] {
   const out: LLMProvider[] = [];
   if (settings.apiKeys.openai) out.push(new OpenAIProvider(settings.apiKeys.openai));
   if (settings.apiKeys.anthropic) out.push(new AnthropicProvider(settings.apiKeys.anthropic));
@@ -115,15 +102,61 @@ export function buildProvidersFromSettings(
   return out;
 }
 
-export function configuredProvidersFromSettings(
+export function configuredProvidersFromSettings(settings: ResolvedSettings): ProviderName[] {
+  return PROVIDER_NAMES.filter((p) => !!settings.apiKeys[p]);
+}
+
+/** Builds a single provider, or undefined when it has no credential. */
+export function buildProvider(
+  provider: ProviderName,
   settings: ResolvedSettings,
-): ProviderName[] {
-  const names: ProviderName[] = [];
-  if (settings.apiKeys.openai) names.push("openai");
-  if (settings.apiKeys.anthropic) names.push("anthropic");
-  if (settings.apiKeys.google) names.push("google");
-  if (settings.apiKeys.groq) names.push("groq");
-  if (settings.apiKeys.deepseek) names.push("deepseek");
-  if (settings.apiKeys.ollama) names.push("ollama");
-  return names;
+): LLMProvider | undefined {
+  return buildProvidersFromSettings(settings).find((p) => p.name === provider);
+}
+
+export interface ListModelsResult {
+  models: ModelInfo[];
+  /** Where the list came from — the UI says so, rather than implying freshness. */
+  source: "live" | "catalog";
+  /** Why the live fetch was skipped or failed, when it was. */
+  reason?: string;
+}
+
+/**
+ * Current models for a provider, asked of the provider itself when possible.
+ *
+ * A hardcoded list goes stale the moment a vendor ships — every provider in this
+ * repo had drifted by at least one major generation before this existed. The
+ * offline catalog is the fallback, never the first answer.
+ */
+export async function listModelsForProvider(
+  provider: ProviderName,
+  settings: ResolvedSettings,
+): Promise<ListModelsResult> {
+  const fallback = () => ({
+    models: MODEL_CATALOG[provider].models.map((m) => ({
+      id: m.id,
+      label: m.label,
+      hint: m.hint,
+    })),
+    source: "catalog" as const,
+  });
+
+  const client = buildProvider(provider, settings);
+  if (!client?.listModels) {
+    return {
+      ...fallback(),
+      reason: requiresKey(provider)
+        ? "No API key configured"
+        : "Provider unavailable",
+    };
+  }
+
+  try {
+    const models = await client.listModels();
+    if (models.length === 0) return { ...fallback(), reason: "Provider returned no models" };
+    return { models, source: "live" };
+  } catch (err) {
+    return { ...fallback(), reason: (err as Error).message };
+  }
 }

@@ -91,7 +91,8 @@ function renderResults(results: ProviderResult[], missing: string[]): string {
 
   const ok = results.filter((r) => r.ok);
   if (ok.length > 1) {
-    const totalCost = ok.reduce((sum, r) => sum + (r.ok ? r.value.costUsd : 0), 0);
+    // Unpriced models add nothing rather than counting as free.
+    const totalCost = ok.reduce((sum, r) => sum + (r.ok ? (r.value.costUsd ?? 0) : 0), 0);
     const fastest = ok.reduce((a, b) =>
       a.ok && b.ok && b.value.durationMs < a.value.durationMs ? b : a,
     );

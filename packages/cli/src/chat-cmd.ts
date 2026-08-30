@@ -157,7 +157,7 @@ async function runChat(opts: ChatCliOptions): Promise<void> {
         chalk.cyan(" ─"),
     );
     console.log();
-    const picks = await pickModelsInteractive(selected, settings.models, explicitModel);
+    const picks = await pickModelsInteractive(selected, settings.models, explicitModel, settings);
     for (const [name, model] of Object.entries(picks)) {
       if (!model) continue;
       const p = name as ProviderName;
@@ -796,7 +796,7 @@ async function handleSlash(
 
       const picked = model.length > 0
         ? model
-        : await pickModelInteractive(target, state.settings.models[target]);
+        : await pickModelInteractive(target, state.settings.models[target], state.settings);
       state.settings.models[target] = picked;
       console.log(chalk.dim(`  ✓ ${target} model = ${picked}`));
 
@@ -939,14 +939,16 @@ async function runTurn(state: ChatState, input: string): Promise<void> {
   state.stats.turns += 1;
   for (const r of ok) {
     state.stats.tokens += r.value.usage.total;
-    state.stats.costUsd += r.value.costUsd;
+    // Unpriced models contribute nothing to the running total rather than
+    // being counted as free.
+    state.stats.costUsd += r.value.costUsd ?? 0;
     const bp = state.stats.byProvider[r.value.provider] ?? {
       tokens: 0,
       costUsd: 0,
       turns: 0,
     };
     bp.tokens += r.value.usage.total;
-    bp.costUsd += r.value.costUsd;
+    bp.costUsd += r.value.costUsd ?? 0;
     bp.turns += 1;
     state.stats.byProvider[r.value.provider] = bp;
   }

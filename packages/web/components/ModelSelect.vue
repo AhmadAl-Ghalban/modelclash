@@ -34,8 +34,9 @@
         v-if="open"
         :id="listId"
         role="listbox"
-        class="absolute z-20 mt-1.5 w-full max-h-72 overflow-y-auto rounded-xl shadow-overlay
+        class="absolute z-20 w-full max-h-72 overflow-y-auto rounded-xl shadow-overlay
           bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+        :class="dropUp ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
         @keydown.esc.prevent="close(true)"
         @keydown.down.prevent="move(1)"
         @keydown.up.prevent="move(-1)"
@@ -136,8 +137,27 @@ const buttonEl = ref<HTMLElement>()
 const customEl = ref<HTMLInputElement>()
 const optionEls = ref<HTMLElement[]>([])
 
+const dropUp = ref(false)
+
+/**
+ * Opens upward when the menu would not fit below. The dialog body scrolls, so a
+ * menu on the last provider would otherwise be clipped by its container.
+ */
+function updateDropDirection() {
+  const rect = buttonEl.value?.getBoundingClientRect()
+  if (!rect) return
+  const MENU_MAX_HEIGHT = 288 // matches max-h-72
+  const below = window.innerHeight - rect.bottom
+  dropUp.value = below < MENU_MAX_HEIGHT && rect.top > below
+}
+
 function toggle() {
-  open.value ? close() : (open.value = true)
+  if (open.value) {
+    close()
+    return
+  }
+  updateDropDirection()
+  open.value = true
 }
 
 /** `restoreFocus` sends focus back to the trigger — required after Escape. */
@@ -147,6 +167,7 @@ function close(restoreFocus = false) {
 }
 
 async function openAndFocus(index: number) {
+  updateDropDirection()
   open.value = true
   await nextTick()
   optionEls.value[index]?.focus()

@@ -195,20 +195,13 @@
 
           <!-- Live responses, in the same grid so nothing shifts when they land -->
           <section v-if="chatStore.isStreaming" class="space-y-3">
-            <div v-if="streamingProviders.length" class="grid gap-3" :class="gridColsFor(streamingProviders.length)">
+            <div class="grid gap-3" :class="gridColsFor(liveCards.length)">
               <StreamingBubble
-                v-for="provider in streamingProviders"
-                :key="provider"
-                :provider="provider"
-                :text="chatStore.streamingChunks[provider]"
-              />
-            </div>
-            <div v-else class="grid gap-3" :class="gridColsFor(expectedProviderCount)">
-              <StreamingBubble
-                v-for="p in settingsStore.activeProviders"
-                :key="p.provider"
-                :provider="p.provider"
-                text=""
+                v-for="card in liveCards"
+                :key="card.provider"
+                :provider="card.provider"
+                :text="card.text"
+                :error="card.error"
               />
             </div>
           </section>
@@ -305,8 +298,25 @@ const activeProviderSummary = computed(() => {
     .join(', ')}`
 })
 
-const streamingProviders = computed(() => Object.keys(chatStore.streamingChunks))
-const expectedProviderCount = computed(() => Math.max(settingsStore.activeProviders.length, 1))
+/**
+ * One card per provider we expect to hear from, so the grid keeps its shape for
+ * the whole turn: a provider that fails flips to a failed card in place instead
+ * of vanishing and reflowing everything beside it.
+ */
+const liveCards = computed(() => {
+  const seen = new Set<string>([
+    ...settingsStore.activeProviders.map((p) => p.provider),
+    ...Object.keys(chatStore.streamingChunks),
+    ...Object.keys(chatStore.streamingErrors),
+  ])
+  return [...seen]
+    .sort((a, b) => PROVIDER_ORDER.indexOf(a) - PROVIDER_ORDER.indexOf(b))
+    .map((provider) => ({
+      provider,
+      text: chatStore.streamingChunks[provider] ?? '',
+      error: chatStore.streamingErrors[provider],
+    }))
+})
 
 /**
  * Groups the flat message list into turns: one user prompt plus every model
@@ -331,8 +341,20 @@ const turns = computed<Turn[]>(() => {
       out[out.length - 1].responses.push(msg)
     }
   }
+  // The server emits responses in completion order, which reshuffles the
+  // columns between turns. Sorting by a fixed provider order keeps each
+  // provider in the same column so you can scan straight down it.
+  for (const turn of out) turn.responses.sort(byProvider)
   return out
 })
+
+function byProvider(a: ChatMessage, b: ChatMessage): number {
+  const rank = (p?: string) => {
+    const i = PROVIDER_ORDER.indexOf(p ?? '')
+    return i === -1 ? PROVIDER_ORDER.length : i
+  }
+  return rank(a.provider) - rank(b.provider)
+}
 
 /** One column on phones; never more than three, so text stays readable. */
 function gridColsFor(count: number): string {
@@ -359,7 +381,11 @@ function onScroll() {
 // Watching cheap scalars rather than deep-watching the message array: during a
 // stream that watcher would re-run on every token.
 watch(
-  () => [chatStore.messages.length, JSON.stringify(chatStore.streamingChunks).length],
+  () => [
+    chatStore.messages.length,
+    JSON.stringify(chatStore.streamingChunks).length,
+    Object.keys(chatStore.streamingErrors).length,
+  ],
   () => {
     if (stickToBottom.value) nextTick(() => scrollToBottom())
   },

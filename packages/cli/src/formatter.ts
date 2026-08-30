@@ -97,8 +97,10 @@ export function formatTurnSummary(results: ProviderResult[]): string {
   const fastest = ok.length > 0
     ? ok.reduce((a, b) => (a.value.durationMs <= b.value.durationMs ? a : b))
     : undefined;
-  const cheapest = ok.length > 0
-    ? ok.reduce((a, b) => (a.value.costUsd <= b.value.costUsd ? a : b))
+  // Unpriced models can't win "cheapest" — an unknown cost is not a low one.
+  const priced = ok.filter((r) => r.value.costUsd !== null);
+  const cheapest = priced.length > 0
+    ? priced.reduce((a, b) => (a.value.costUsd! <= b.value.costUsd! ? a : b))
     : undefined;
   const longest = ok.length > 0
     ? ok.reduce((a, b) => (a.value.usage.output >= b.value.usage.output ? a : b))

@@ -13,6 +13,15 @@ export {
 export { estimateCost, formatCost, roundTo } from "./utils/cost.js";
 export { retryWithBackoff, withTimeout, sleep } from "./utils/retry.js";
 export { PRICING, DEFAULT_PRICING } from "./config/pricing.js";
+export {
+  MODEL_CATALOG,
+  PROVIDER_NAMES,
+  MODELS_WITH_EFFORT,
+  requiresKey,
+  findModel,
+  type CatalogModel,
+  type ProviderCatalog,
+} from "./config/catalog.js";
 
 export type {
   ModelclashConfig,
@@ -37,8 +46,11 @@ export {
   resolveSettings,
   buildProvidersFromSettings,
   configuredProvidersFromSettings,
+  buildProvider,
+  listModelsForProvider,
   DEFAULT_MODELS,
   DEFAULT_OLLAMA_BASE_URL,
   type ResolvedSettings,
   type CliOverrides,
+  type ListModelsResult,
 } from "./config/resolve.js";

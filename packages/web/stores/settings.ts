@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import type { ProviderSetting } from '~/types'
+import type { ProviderModelList, ProviderSetting } from '~/types'
 import { ApiError } from '~/composables/useApi'
 
 function message(err: unknown): string {
@@ -13,9 +13,13 @@ export const useSettingsStore = defineStore('settings', () => {
   const isLoading = ref(false)
   const error = ref<string | null>(null)
 
-  /** Providers that have a key and are switched on — the ones a prompt reaches. */
+  /**
+   * Providers a prompt will actually reach: switched on, and either holding a
+   * key or not needing one. Ollama runs locally with no credential, so gating
+   * purely on `hasKey` used to hide a perfectly working local model.
+   */
   const activeProviders = computed(() =>
-    settings.value.filter((s) => s.hasKey && s.enabled),
+    settings.value.filter((s) => s.enabled && (s.hasKey || s.requiresKey === false)),
   )
 
   const isConfigured = computed(() => activeProviders.value.length > 0)
@@ -53,5 +57,32 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  return { settings, isLoading, error, activeProviders, isConfigured, loadSettings, saveSettings }
+  /**
+   * Asks the server for a provider's current models. The server queries the
+   * provider's own API when a key exists, so this stays correct as vendors ship
+   * new models without anyone editing a list here.
+   */
+  async function fetchModels(provider: string): Promise<ProviderModelList> {
+    try {
+      return await api.get<ProviderModelList>(`/settings/models/${provider}`)
+    } catch (err) {
+      return {
+        provider,
+        models: [],
+        source: 'catalog',
+        reason: message(err),
+      }
+    }
+  }
+
+  return {
+    settings,
+    isLoading,
+    error,
+    activeProviders,
+    isConfigured,
+    loadSettings,
+    saveSettings,
+    fetchModels,
+  }
 })

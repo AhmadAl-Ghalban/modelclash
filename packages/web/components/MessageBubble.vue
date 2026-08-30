@@ -81,9 +81,30 @@
       </div>
     </header>
 
+    <!--
+      Failures lead with a sentence the reader can act on; the provider's own
+      text stays one disclosure away so debugging information isn't lost.
+    -->
+    <div v-if="isError" class="px-4 py-3 flex-1">
+      <p class="text-[15px] leading-relaxed text-red-700 dark:text-red-300">
+        {{ failure.summary }}
+      </p>
+      <details v-if="!failure.detailIsRedundant" class="mt-2">
+        <summary
+          class="text-xs cursor-pointer select-none text-red-600/80 dark:text-red-400/80 hover:text-red-700 dark:hover:text-red-300"
+        >
+          Provider response
+        </summary>
+        <pre
+          class="mt-1.5 p-2 rounded-lg overflow-x-auto text-[11px] leading-relaxed whitespace-pre-wrap break-words
+            bg-red-100/60 dark:bg-red-950/50 text-red-800 dark:text-red-300/90"
+        >{{ failure.detail }}</pre>
+      </details>
+    </div>
+
     <div
-      class="px-4 py-3 text-[15px] leading-relaxed whitespace-pre-wrap break-words flex-1"
-      :class="isError ? 'text-red-700 dark:text-red-300' : 'text-slate-800 dark:text-slate-200'"
+      v-else
+      class="px-4 py-3 text-[15px] leading-relaxed whitespace-pre-wrap break-words flex-1 text-slate-800 dark:text-slate-200"
     >
       {{ message.content }}
     </div>
@@ -126,12 +147,15 @@ const props = defineProps<{ message: ChatMessage }>()
 
 const { meta } = useProviderMeta()
 const { tokens, cost, duration, clockTime } = useFormat()
+const { explain } = useProviderError()
 
 const isUser = computed(() => props.message.role === 'user')
 const isError = computed(() => props.message.role === 'error')
 const providerLabel = computed(() =>
   props.message.provider ? meta(props.message.provider).label : 'Assistant',
 )
+
+const failure = computed(() => explain(props.message.content))
 
 const tokenText = computed(() => tokens(props.message.tokens))
 const costText = computed(() => cost(props.message.costUsd))

@@ -8,6 +8,7 @@ vi.mock('../src/settings/entities/provider-setting.entity.js', () => ({
 }));
 
 const { SettingsService } = await import('../src/settings/settings.service.js');
+const { DEFAULT_MODELS, DEFAULT_OLLAMA_BASE_URL } = await import('@modelclash/core');
 type ProviderSetting = unknown;
 
 type Repo<T> = {
@@ -122,13 +123,13 @@ describe('SettingsService.updateSettings', () => {
       settings: [{ provider: 'anthropic', apiKey: 'sk-a', model: '', enabled: true }],
     });
     expect(repo.create).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: 'anthropic', model: 'claude-sonnet-4' }),
+      expect.objectContaining({ provider: 'anthropic', model: DEFAULT_MODELS.anthropic }),
     );
   });
 });
 
 describe('SettingsService.getApiKeys / getModels', () => {
-  it('getApiKeys returns only enabled providers with a non-empty key', async () => {
+  it('returns enabled providers with a key, plus Ollama, which needs none', async () => {
     const repo = makeRepo();
     repo.find.mockResolvedValue([
       { provider: 'openai', apiKey: 'sk-1', enabled: true, model: 'gpt-4o' },
@@ -136,8 +137,26 @@ describe('SettingsService.getApiKeys / getModels', () => {
     ]);
     const service = new SettingsService(repo as never);
     const keys = await service.getApiKeys();
-    expect(keys).toEqual({ openai: 'sk-1' });
-    expect(repo.find).toHaveBeenCalledWith({ where: { enabled: true } });
+    // Ollama is local: it gets a default base URL even with no row saved.
+    expect(keys).toEqual({ openai: 'sk-1', ollama: DEFAULT_OLLAMA_BASE_URL });
+  });
+
+  it('omits Ollama once it has been explicitly disabled', async () => {
+    const repo = makeRepo();
+    repo.find.mockResolvedValue([
+      { provider: 'ollama', apiKey: '', enabled: false, model: 'llama3.2' },
+    ]);
+    const service = new SettingsService(repo as never);
+    expect(await service.getApiKeys()).toEqual({});
+  });
+
+  it('honours a custom Ollama server URL stored in the key slot', async () => {
+    const repo = makeRepo();
+    repo.find.mockResolvedValue([
+      { provider: 'ollama', apiKey: 'http://box.local:11434/v1', enabled: true, model: 'llama3.2' },
+    ]);
+    const service = new SettingsService(repo as never);
+    expect((await service.getApiKeys()).ollama).toBe('http://box.local:11434/v1');
   });
 
   it('getModels overlays stored models on top of the defaults', async () => {
@@ -148,7 +167,7 @@ describe('SettingsService.getApiKeys / getModels', () => {
     const service = new SettingsService(repo as never);
     const models = await service.getModels();
     expect(models.openai).toBe('gpt-4o-mini');
-    expect(models.anthropic).toBe('claude-sonnet-4');
-    expect(models.ollama).toBe('llama3.2');
+    expect(models.anthropic).toBe(DEFAULT_MODELS.anthropic);
+    expect(models.ollama).toBe(DEFAULT_MODELS.ollama);
   });
 });

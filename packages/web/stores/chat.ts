@@ -16,6 +16,12 @@ export const useChatStore = defineStore('chat', () => {
   const messages = ref<ChatMessage[]>([])
   const isStreaming = ref(false)
   const streamingChunks = ref<Record<string, string>>({}) // provider → accumulated text
+  /**
+   * Providers that failed mid-stream. The server emits `providerError` as soon
+   * as a call fails; without this the card sat on "Thinking…" until the whole
+   * turn completed, which reads as a hang rather than a failure.
+   */
+  const streamingErrors = ref<Record<string, string>>({}) // provider → raw message
   const isLoadingSessions = ref(false)
   const isLoadingMessages = ref(false)
 
@@ -146,6 +152,7 @@ export const useChatStore = defineStore('chat', () => {
     const sessionId = activeSessionId.value
     isStreaming.value = true
     streamingChunks.value = {}
+    streamingErrors.value = {}
     error.value = null
 
     try {
@@ -155,9 +162,13 @@ export const useChatStore = defineStore('chat', () => {
         } else if (event === 'chunk') {
           streamingChunks.value[data.provider] =
             (streamingChunks.value[data.provider] || '') + data.text
+        } else if (event === 'providerError') {
+          streamingErrors.value[data.provider] = data.message ?? ''
+          delete streamingChunks.value[data.provider]
         } else if (event === 'complete') {
           messages.value.push(...data.messages)
           streamingChunks.value = {}
+          streamingErrors.value = {}
           // Refresh session list to update title and counts
           loadSessions()
         }
@@ -167,6 +178,7 @@ export const useChatStore = defineStore('chat', () => {
     } finally {
       isStreaming.value = false
       streamingChunks.value = {}
+      streamingErrors.value = {}
     }
   }
 
@@ -177,6 +189,7 @@ export const useChatStore = defineStore('chat', () => {
     messages,
     isStreaming,
     streamingChunks,
+    streamingErrors,
     isLoadingSessions,
     isLoadingMessages,
     error,

@@ -1,7 +1,8 @@
 import { checkbox, select, input } from "@inquirer/prompts";
 import chalk from "chalk";
-import type { LLMProvider } from "@modelclash/core";
-import type { ProviderName } from "@modelclash/core";
+import ora from "ora";
+import { MODEL_CATALOG, MODELS_WITH_EFFORT, listModelsForProvider } from "@modelclash/core";
+import type { LLMProvider, ModelInfo, ProviderName, ResolvedSettings } from "@modelclash/core";
 
 const THEME = {
   prefix: { idle: chalk.cyan("◆"), done: chalk.green("✓") },
@@ -79,26 +80,17 @@ const ALL: ProviderName[] = [
   "ollama",
 ];
 
-export const MODELS_BY_PROVIDER: Record<ProviderName, string[]> = {
-  openai: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o1", "o1-mini"],
-  anthropic: [
-    "claude-sonnet-4",
-    "claude-opus-4",
-    "claude-haiku-4",
-    "claude-3-5-sonnet-latest",
-    "claude-3-5-haiku-latest",
-  ],
-  google: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro"],
-  groq: [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "llama-3.1-70b-versatile",
-    "mixtral-8x7b-32768",
-    "gemma2-9b-it",
-  ],
-  deepseek: ["deepseek-chat", "deepseek-reasoner"],
-  ollama: ["llama3.2", "llama3.1", "llama3", "qwen2.5", "mistral"],
-};
+/**
+ * Offline model list per provider, from the shared catalog in @modelclash/core.
+ * `pickModelInteractive` asks the provider for its live list first and only
+ * falls back to this.
+ */
+export const MODELS_BY_PROVIDER: Record<ProviderName, string[]> = Object.fromEntries(
+  (Object.keys(MODEL_CATALOG) as ProviderName[]).map((p) => [
+    p,
+    MODEL_CATALOG[p].models.map((m) => m.id),
+  ]),
+) as Record<ProviderName, string[]>;
 
 export function parseProviderList(raw: string): ProviderName[] {
   const parts = raw
@@ -146,22 +138,50 @@ export async function pickProvidersInteractive(
 export async function pickModelInteractive(
   provider: ProviderName,
   currentDefault: string,
+  settings?: ResolvedSettings,
 ): Promise<string> {
-  const known = MODELS_BY_PROVIDER[provider] ?? [];
   const meta = PROVIDER_LABEL[provider];
+
+  /*
+   * Ask the provider what it actually offers. Vendors ship models faster than a
+   * bundled list can track, so the catalog is only the fallback — and the prompt
+   * says which one you're looking at rather than implying the list is current.
+   */
+  let models: ModelInfo[] = MODEL_CATALOG[provider].models.map((m) => ({
+    id: m.id,
+    label: m.label,
+    hint: m.hint,
+  }));
+  let note = chalk.dim("bundled list");
+
+  if (settings) {
+    const spinner = ora({ text: `Fetching ${meta.name} models…`, spinner: "dots" }).start();
+    const result = await listModelsForProvider(provider, settings);
+    models = result.models;
+    if (result.source === "live") {
+      spinner.succeed(`${meta.name}: ${models.length} models available`);
+      note = chalk.dim("live from provider");
+    } else {
+      spinner.info(`${meta.name}: using bundled list (${result.reason})`);
+      note = chalk.dim("bundled list");
+    }
+  }
+
+  const known = models.map((m) => m.id);
   const choices = [
-    ...known.map((m) => ({
-      name:
-        m === currentDefault
-          ? `${m.padEnd(28)} ${chalk.dim("default")}`
-          : m,
-      value: m,
-      short: m,
-    })),
+    ...models.map((m) => {
+      const label = m.label && m.label !== m.id ? `${m.id}  ${chalk.dim(m.label)}` : m.id;
+      return {
+        name: m.id === currentDefault ? `${label} ${chalk.dim("· default")}` : label,
+        value: m.id,
+        short: m.id,
+        description: m.hint,
+      };
+    }),
     { name: chalk.dim("✎  custom model name…"), value: "__custom__", short: "custom" },
   ];
   const picked = await select<string>({
-    message: `Pick a model for ${chalk.cyan(meta.name)}`,
+    message: `Pick a model for ${chalk.cyan(meta.name)} ${note}`,
     choices,
     default: known.includes(currentDefault) ? currentDefault : known[0],
     loop: false,
@@ -178,11 +198,7 @@ export async function pickModelInteractive(
   return typed.length > 0 ? typed : currentDefault;
 }
 
-export const MODELS_WITH_EFFORT: Record<string, true> = {
-  "o1": true,
-  "o1-mini": true,
-  "deepseek-reasoner": true,
-};
+export { MODELS_WITH_EFFORT };
 
 export type EffortLevel = "low" | "medium" | "high";
 
@@ -226,11 +242,13 @@ export async function pickModelsInteractive(
   providers: ProviderName[],
   currentDefaults: Record<ProviderName, string>,
   skip: Partial<Record<ProviderName, boolean>> = {},
+  /** Passing settings lets each picker fetch that provider's live model list. */
+  settings?: ResolvedSettings,
 ): Promise<Partial<Record<ProviderName, string>>> {
   const out: Partial<Record<ProviderName, string>> = {};
   for (const p of providers) {
     if (skip[p]) continue;
-    out[p] = await pickModelInteractive(p, currentDefaults[p]);
+    out[p] = await pickModelInteractive(p, currentDefaults[p], settings);
   }
   return out;
 }

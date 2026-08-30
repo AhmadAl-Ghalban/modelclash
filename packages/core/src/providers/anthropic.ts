@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { LLMProvider } from "../interfaces/provider.js";
 import type {
+  ModelInfo,
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
@@ -10,9 +11,45 @@ import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 export class AnthropicProvider implements LLMProvider {
   readonly name = "anthropic" as const;
   private client: Anthropic;
+  private apiKey: string;
 
   constructor(apiKey: string) {
+    this.apiKey = apiKey;
     this.client = new Anthropic({ apiKey });
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    // Called over REST: the pinned @anthropic-ai/sdk (0.30) predates the Models
+    // API, and upgrading it would touch the message path too. Swap this for
+    // `client.models.list()` whenever the SDK is bumped.
+    const models: ModelInfo[] = [];
+    let after: string | undefined;
+
+    do {
+      const url = new URL("https://api.anthropic.com/v1/models");
+      url.searchParams.set("limit", "100");
+      if (after) url.searchParams.set("after_id", after);
+
+      const res = await fetch(url, {
+        headers: {
+          "x-api-key": this.apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+      });
+      if (!res.ok) throw new Error(`Anthropic models request failed (${res.status})`);
+
+      const body = (await res.json()) as {
+        data?: { id: string; display_name?: string }[];
+        has_more?: boolean;
+        last_id?: string;
+      };
+      for (const m of body.data ?? []) {
+        models.push({ id: m.id, label: m.display_name });
+      }
+      after = body.has_more ? body.last_id : undefined;
+    } while (after);
+
+    return models;
   }
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {

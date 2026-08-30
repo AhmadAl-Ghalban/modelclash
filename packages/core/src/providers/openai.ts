@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { LLMProvider } from "../interfaces/provider.js";
 import type {
+  ModelInfo,
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
@@ -17,6 +18,15 @@ export class OpenAIProvider implements LLMProvider {
 
   constructor(apiKey: string) {
     this.client = new OpenAI({ apiKey });
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    const res = await this.client.models.list();
+    return res.data
+      .map((m) => m.id)
+      .filter(isChatModel)
+      .sort()
+      .map((id) => ({ id }));
   }
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {
@@ -93,4 +103,16 @@ export class OpenAIProvider implements LLMProvider {
       durationMs: Date.now() - start,
     };
   }
+}
+
+/**
+ * The models endpoint returns every model on the account — audio, image,
+ * embedding and moderation included. Only chat-completion models can answer a
+ * prompt, so filter by exclusion: the families are stable, the names are not.
+ */
+function isChatModel(id: string): boolean {
+  const NON_CHAT =
+    /(^|-)(tts|whisper|transcribe|embedding|moderation|image|dall-e|audio|search|codex|realtime)(-|$)/;
+  if (NON_CHAT.test(id)) return false;
+  return /^(gpt|o[1-9]|chatgpt)/.test(id);
 }

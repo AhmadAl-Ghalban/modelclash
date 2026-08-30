@@ -102,7 +102,25 @@
               </div>
 
               <div class="space-y-2.5">
-                <div>
+                <div v-if="item.requiresKey === false">
+                  <label :for="`key-${item.provider}`" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                    Server URL
+                  </label>
+                  <input
+                    :id="`key-${item.provider}`"
+                    v-model="item.apiKey"
+                    type="text"
+                    :placeholder="item.hasKey ? 'Saved — leave blank to keep it' : 'http://localhost:11434/v1'"
+                    autocomplete="off"
+                    spellcheck="false"
+                    class="field"
+                  />
+                  <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Runs locally — no API key or account needed. Leave blank to use the default.
+                  </p>
+                </div>
+
+                <div v-else>
                   <label :for="`key-${item.provider}`" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
                     API key
                   </label>
@@ -140,7 +158,7 @@
                       </svg>
                     </button>
                   </div>
-                  <p v-if="item.enabled && !item.hasKey && !item.apiKey" class="mt-1 flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                  <p v-if="item.enabled && item.requiresKey !== false && !item.hasKey && !item.apiKey" class="mt-1 flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-400">
                     <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
                     </svg>
@@ -149,9 +167,38 @@
                 </div>
 
                 <div>
-                  <label :id="`model-label-${item.provider}`" class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
-                    Default model
-                  </label>
+                  <div class="flex items-center justify-between mb-1 gap-2">
+                    <label :id="`model-label-${item.provider}`" class="text-xs font-medium text-slate-600 dark:text-slate-400">
+                      Default model
+                    </label>
+
+                    <!-- Says where the list came from, so a stale fallback never looks current. -->
+                    <span class="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                      <template v-if="loadingModels[item.provider]">Checking…</template>
+                      <template v-else-if="modelLists[item.provider]?.source === 'live'">
+                        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                        Live · {{ modelOptions(item.provider).length }}
+                      </template>
+                      <template v-else-if="modelLists[item.provider]">
+                        <span :title="modelLists[item.provider]?.reason">Bundled list</span>
+                      </template>
+                      <button
+                        type="button"
+                        class="btn-ghost px-1.5 py-0.5 rounded"
+                        :disabled="loadingModels[item.provider]"
+                        :aria-label="`Refresh ${meta(item.provider).label} models`"
+                        @click="loadModels(item.provider)"
+                      >
+                        <svg
+                          class="w-3.5 h-3.5"
+                          :class="{ 'motion-safe:animate-spin': loadingModels[item.provider] }"
+                          fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"
+                        >
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </button>
+                    </span>
+                  </div>
                   <ModelSelect
                     v-model="item.model"
                     :options="modelOptions(item.provider)"
@@ -181,7 +228,7 @@
 
 <script setup lang="ts">
 import { useSettingsStore } from '~/stores/settings'
-import type { ProviderSetting } from '~/types'
+import type { ProviderModelList, ProviderSetting } from '~/types'
 
 type Draft = ProviderSetting & { apiKey: string }
 
@@ -220,6 +267,7 @@ watch(
     await store.loadSettings()
     localSettings.value = store.settings.map((s) => ({ ...s, apiKey: '' }))
     baseline.value = JSON.stringify(localSettings.value)
+    loadAllModels()
 
     await nextTick()
     focusable()[0]?.focus()
@@ -271,55 +319,37 @@ async function save() {
   )
   // On failure the dialog stays open with the input intact and the error shown.
   if (ok) emit('close')
+  else loadAllModels() // a rejected key may have changed what's fetchable
 }
 
-const MODEL_CATALOG: Record<string, { value: string; label: string; hint?: string }[]> = {
-  openai: [
-    { value: 'gpt-4o', label: 'GPT-4o', hint: 'Flagship multimodal' },
-    { value: 'gpt-4o-mini', label: 'GPT-4o mini', hint: 'Fast & cheap' },
-    { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
-    { value: 'o3', label: 'o3', hint: 'Reasoning' },
-    { value: 'o3-mini', label: 'o3-mini', hint: 'Fast reasoning' },
-    { value: 'o1', label: 'o1' },
-    { value: 'o1-mini', label: 'o1-mini' },
-  ],
-  anthropic: [
-    { value: 'claude-opus-4', label: 'Claude Opus 4', hint: 'Most capable' },
-    { value: 'claude-sonnet-4', label: 'Claude Sonnet 4', hint: 'Balanced' },
-    { value: 'claude-haiku-4', label: 'Claude Haiku 4', hint: 'Fastest' },
-    { value: 'claude-3-7-sonnet-latest', label: 'Claude 3.7 Sonnet' },
-    { value: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet' },
-    { value: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku' },
-  ],
-  google: [
-    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro', hint: 'Most capable' },
-    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash', hint: 'Fast' },
-    { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
-    { value: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
-    { value: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
-  ],
-  groq: [
-    { value: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B', hint: 'Versatile' },
-    { value: 'llama-3.1-70b-versatile', label: 'Llama 3.1 70B' },
-    { value: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B', hint: 'Instant' },
-    { value: 'mixtral-8x7b-32768', label: 'Mixtral 8x7B', hint: '32k ctx' },
-    { value: 'gemma2-9b-it', label: 'Gemma 2 9B' },
-  ],
-  deepseek: [
-    { value: 'deepseek-chat', label: 'DeepSeek Chat', hint: 'General purpose' },
-    { value: 'deepseek-reasoner', label: 'DeepSeek Reasoner', hint: 'Reasoning' },
-  ],
-  ollama: [
-    { value: 'llama3.2', label: 'Llama 3.2', hint: 'Default in compose' },
-    { value: 'llama3.1', label: 'Llama 3.1' },
-    { value: 'qwen2.5', label: 'Qwen 2.5' },
-    { value: 'gemma2', label: 'Gemma 2' },
-    { value: 'mistral', label: 'Mistral' },
-    { value: 'phi3', label: 'Phi-3' },
-  ],
+/**
+ * Models are fetched per provider from the server, which asks the provider's own
+ * API when a key is present. Nothing here is hardcoded — a vendor shipping a new
+ * model shows up without a code change.
+ */
+const modelLists = reactive<Record<string, ProviderModelList>>({})
+const loadingModels = reactive<Record<string, boolean>>({})
+
+const modelOptions = (p: string) =>
+  (modelLists[p]?.models ?? []).map((m) => ({
+    value: m.id,
+    label: m.label ?? m.id,
+    hint: m.hint,
+  }))
+
+async function loadModels(provider: string) {
+  loadingModels[provider] = true
+  try {
+    modelLists[provider] = await store.fetchModels(provider)
+  } finally {
+    loadingModels[provider] = false
+  }
 }
 
-const modelOptions = (p: string) => MODEL_CATALOG[p] || []
+/** Loads every provider's list in parallel when the dialog opens. */
+function loadAllModels() {
+  for (const item of localSettings.value) loadModels(item.provider)
+}
 </script>
 
 <style scoped>
