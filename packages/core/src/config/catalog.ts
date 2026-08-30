@@ -161,7 +161,13 @@ export const MODEL_CATALOG: Record<ProviderName, ProviderCatalog> = {
   },
 
   groq: {
-    defaultModel: "llama-3.3-70b-versatile",
+    /*
+     * Not llama-3.3-70b: model grants vary by account and it 404s on some.
+     * gpt-oss-20b is a plain chat model on Groq's production list. Avoid
+     * defaulting to `groq/compound` — it is an agentic system that expands the
+     * request with tool results and returns 413 on research-style prompts.
+     */
+    defaultModel: "openai/gpt-oss-20b",
     requiresKey: true,
     models: [
       {
@@ -176,10 +182,15 @@ export const MODEL_CATALOG: Record<ProviderName, ProviderCatalog> = {
         hint: "Instant",
         pricing: { inputPerMTokens: 0.05, outputPerMTokens: 0.08 },
       },
-      { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", hint: "Open weights" },
       { id: "openai/gpt-oss-20b", label: "GPT-OSS 20B", hint: "Open weights" },
-      { id: "groq/compound", label: "Groq Compound", hint: "Agentic system" },
-      { id: "groq/compound-mini", label: "Groq Compound Mini" },
+      { id: "openai/gpt-oss-120b", label: "GPT-OSS 120B", hint: "Open weights" },
+      { id: "qwen/qwen3.8-27b", label: "Qwen 3.8 27B" },
+      {
+        id: "groq/compound",
+        label: "Groq Compound",
+        hint: "Agentic — searches the web; 413s on research prompts",
+      },
+      { id: "groq/compound-mini", label: "Groq Compound Mini", hint: "Agentic, single tool call" },
     ],
   },
 
@@ -230,6 +241,15 @@ export const MODEL_CATALOG: Record<ProviderName, ProviderCatalog> = {
 function FREE(): ModelPricing {
   return { inputPerMTokens: 0, outputPerMTokens: 0 }
 }
+
+/**
+ * Output-token cap sent with every request.
+ *
+ * Bounds a runaway answer and keeps comparison cards a readable length; it is
+ * not a rate-limit control. (Groq's `413 request_too_large` on the agentic
+ * `groq/compound` system is unrelated — it is independent of `max_tokens`.)
+ */
+export const DEFAULT_MAX_TOKENS = 4096
 
 export const PROVIDER_NAMES = Object.keys(MODEL_CATALOG) as ProviderName[]
 

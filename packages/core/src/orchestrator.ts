@@ -12,6 +12,8 @@ export interface RunPromptOptions {
   modelFor: Record<ProviderName, string>;
   temperature: number;
   timeoutMs: number;
+  /** Output cap per provider; falls back to DEFAULT_MAX_TOKENS. */
+  maxTokens?: number;
   stream?: boolean;
   onChunk?: (provider: ProviderName, chunk: string) => void;
 }
@@ -19,13 +21,14 @@ export interface RunPromptOptions {
 export async function runPrompt(
   opts: RunPromptOptions,
 ): Promise<ProviderResult[]> {
-  const { providers, prompt, history, modelFor, temperature, timeoutMs, stream, onChunk } = opts;
+  const { providers, prompt, history, modelFor, temperature, timeoutMs, maxTokens, stream, onChunk } =
+    opts;
 
   const tasks = providers.map(async (p): Promise<ProviderResult> => {
     const model = modelFor[p.name];
     const start = Date.now();
     try {
-      const req = { prompt, history, model, temperature, timeoutMs };
+      const req = { prompt, history, model, temperature, timeoutMs, maxTokens };
       const value = stream && p.streamGenerate
         ? await p.streamGenerate(req, (chunk) => onChunk?.(p.name, chunk))
         : await p.generate(req);

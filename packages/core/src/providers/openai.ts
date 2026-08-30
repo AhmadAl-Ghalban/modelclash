@@ -5,6 +5,7 @@ import type {
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
+import { DEFAULT_MAX_TOKENS } from "../config/catalog.js";
 import { estimateCost } from "../utils/cost.js";
 import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 
@@ -34,6 +35,7 @@ export class OpenAIProvider implements LLMProvider {
     const call = () =>
       this.client.chat.completions.create({
         model: req.model,
+        max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
         temperature: req.temperature,
         ...(req.reasoningEffort && supportsReasoning(req.model)
           ? { reasoning_effort: req.reasoningEffort }
@@ -71,6 +73,7 @@ export class OpenAIProvider implements LLMProvider {
     const start = Date.now();
     const stream = await this.client.chat.completions.create({
       model: req.model,
+      max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
       temperature: req.temperature,
       messages: [{ role: "user", content: req.prompt }],
       stream: true,

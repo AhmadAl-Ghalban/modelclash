@@ -99,7 +99,7 @@ DEEPSEEK_API_KEY=sk-...
 DEFAULT_OPENAI_MODEL=gpt-5.6-terra
 DEFAULT_ANTHROPIC_MODEL=claude-opus-5
 DEFAULT_GOOGLE_MODEL=gemini-3.7-flash
-DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
+DEFAULT_GROQ_MODEL=openai/gpt-oss-20b
 DEFAULT_DEEPSEEK_MODEL=deepseek-v4-flash
 DEFAULT_OLLAMA_MODEL=llama3.2
 
@@ -130,7 +130,7 @@ You can run modelclash without spending money using any of these:
 
 | Provider     | Free tier                                                                          | Sign-up                                  |
 | ------------ | ---------------------------------------------------------------------------------- | ---------------------------------------- |
-| **Groq**     | Generous free rate limits, very fast Llama 3.3 70B                                 | https://console.groq.com/keys            |
+| **Groq**     | Generous free rate limits, very fast. Model grants vary by account — the picker lists yours | https://console.groq.com/keys            |
 | **Google**   | Free Gemini tier (15 RPM)                                                          | https://aistudio.google.com/apikey       |
 | **DeepSeek** | Free starter credits, strong reasoning (`deepseek-v4-flash`, `deepseek-v4-pro`)      | https://platform.deepseek.com            |
 | **Ollama**   | 100 % local — no key, no network. Install Ollama, `ollama pull llama3.2`           | https://ollama.com                       |
@@ -288,7 +288,7 @@ modelclash "<prompt>" [options]
 | `--model-openai <model>`    | OpenAI model                                                                                               | `gpt-5.6-terra`          |
 | `--model-anthropic <model>` | Anthropic model                                                                                            | `claude-opus-5`          |
 | `--model-google <model>`    | Google model                                                                                               | `gemini-3.7-flash`       |
-| `--model-groq <model>`      | Groq model                                                                                                 | `llama-3.3-70b-versatile`|
+| `--model-groq <model>`      | Groq model                                                                                                 | `openai/gpt-oss-20b`     |
 | `--model-deepseek <model>`  | DeepSeek model                                                                                             | `deepseek-v4-flash`      |
 | `--model-ollama <model>`    | Ollama model                                                                                               | `llama3.2`               |
 | `-p, --providers <list>`    | Providers to use (comma-separated, e.g. `openai,groq`). If omitted in a TTY, an interactive picker appears. | all with keys            |
@@ -540,6 +540,11 @@ Model lists are **not** maintained by hand. Each provider in `@modelclash/core` 
 The web UI calls `GET /api/settings/models/:provider`, which returns `{ models, source, reason }` — `source` is `"live"` when it came from the provider just now and `"catalog"` when it fell back, with `reason` explaining why. The picker labels each list accordingly, so a stale fallback never masquerades as current.
 
 `packages/core/src/config/catalog.ts` is the fallback and the **only** place that carries pricing (no vendor exposes prices over an API). Update it when prices change or when you want a better offline default; everything else — CLI picker, server defaults, web dialog, cost estimation — derives from it.
+
+### Known provider gotchas
+
+- **Groq `groq/compound` returns `413 request_too_large`.** Compound is an *agentic* system: it runs web searches server-side and folds the results back into the request, which can exceed the size limit even for a one-line question. It is independent of `max_tokens` — a 512-token cap fails identically. Use a plain chat model (`openai/gpt-oss-20b`, `qwen/qwen3.8-27b`) for comparisons, or `groq/compound-mini`, which makes a single tool call and stays under the limit.
+- **Groq model grants vary by account.** `llama-3.3-70b-versatile` is on Groq's public production list but 404s on some keys. Live discovery lists what *your* key can actually reach — trust the picker over any bundled default.
 
 ### Environment variables and `.env`
 

@@ -143,13 +143,17 @@ export async function listModelsForProvider(
   });
 
   const client = buildProvider(provider, settings);
-  if (!client?.listModels) {
+  if (!client) {
     return {
       ...fallback(),
-      reason: requiresKey(provider)
-        ? "No API key configured"
-        : "Provider unavailable",
+      reason: requiresKey(provider) ? "No API key configured" : "Provider unavailable",
     };
+  }
+  if (!client.listModels) {
+    // Distinct from a missing credential: the provider is usable, it just
+    // can't enumerate. Saying "no API key" here sent people to check a key
+    // that was already set.
+    return { ...fallback(), reason: "This provider can't list its models" };
   }
 
   try {

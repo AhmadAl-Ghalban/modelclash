@@ -39,6 +39,16 @@ export function useProviderError() {
       summary = "The key is valid but isn't allowed to use this model."
     } else if (/\b429\b/.test(detail) || lower.includes('rate limit') || lower.includes('quota')) {
       summary = 'Rate limited or out of quota. Wait a moment and retry.'
+    } else if (/\b413\b/.test(detail) || lower.includes('request_too_large') || lower.includes('too large')) {
+      /*
+       * Almost always an agentic model rather than a long prompt: systems like
+       * `groq/compound` run web searches server-side and fold the results back
+       * into the request, which can exceed the size limit even for a one-line
+       * question. Naming the cause saves people shortening a prompt that was
+       * never the problem.
+       */
+      summary =
+        'The request grew too large for this model. Agentic models expand it with search results — try a plain chat model instead.'
     } else if (lower.includes('timed out') || lower.includes('timeout') || lower.includes('etimedout')) {
       summary = 'The provider took too long to respond.'
     } else if (/\b404\b/.test(detail) || lower.includes('model_not_found') || lower.includes('does not exist')) {
