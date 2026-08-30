@@ -30,6 +30,9 @@ services:
       DATABASE_URL: postgresql://modelclash:modelclash@postgres:5432/modelclash
       PORT: 3001
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # Ollama needs no key, but inside the compose network it lives at the
+      # service name, not localhost. Stated here rather than guessed in code.
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434/v1}
       NODE_ENV: production
     ports:
       - "3001:3001"

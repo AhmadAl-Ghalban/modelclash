@@ -7,6 +7,7 @@ COPY packages/core/package.json    ./packages/core/
 COPY packages/cli/package.json     ./packages/cli/
 COPY packages/server/package.json  ./packages/server/
 COPY packages/web/package.json     ./packages/web/
+COPY packages/mcp/package.json     ./packages/mcp/
 
 RUN npm ci
 

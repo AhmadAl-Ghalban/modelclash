@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { LLMProvider } from "../interfaces/provider.js";
 import type {
+  ModelInfo,
   ProviderName,
   ProviderRequest,
   ProviderResponse,
@@ -26,6 +27,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
   constructor(opts: OpenAICompatibleOptions) {
     this.name = opts.name;
     this.client = new OpenAI({ apiKey: opts.apiKey, baseURL: opts.baseURL });
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    const res = await this.client.models.list();
+    return res.data.map((m) => ({ id: m.id })).sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {

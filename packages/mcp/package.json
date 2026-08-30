@@ -1,0 +1,32 @@
+{
+  "name": "@modelclash/mcp",
+  "version": "1.0.0",
+  "description": "Model Context Protocol server exposing modelclash multi-provider comparison as MCP tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "modelclash-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "llm",
+    "modelclash"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelclash/core": "1.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "dotenv": "^16.4.5",
+    "zod": "^3.25.76"
+  }
+}

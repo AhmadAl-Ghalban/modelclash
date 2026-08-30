@@ -3,16 +3,19 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ProviderSetting } from './entities/provider-setting.entity.js';
 import { UpdateSettingsDto } from './dto/update-settings.dto.js';
+import {
+  DEFAULT_MODELS,
+  DEFAULT_OLLAMA_BASE_URL,
+  MODEL_CATALOG,
+  PROVIDER_NAMES,
+  listModelsForProvider,
+  requiresKey,
+  type ProviderName,
+} from '@modelclash/core';
 
-const PROVIDERS = ['openai', 'anthropic', 'google', 'groq', 'deepseek', 'ollama'];
-const DEFAULT_MODELS: Record<string, string> = {
-  openai: 'gpt-4o',
-  anthropic: 'claude-sonnet-4',
-  google: 'gemini-2.5-pro',
-  groq: 'llama-3.3-70b-versatile',
-  deepseek: 'deepseek-chat',
-  ollama: 'llama3.2',
-};
+// Provider list, default models and the offline catalog all come from
+// @modelclash/core so there is one place to update when a vendor ships.
+const PROVIDERS = PROVIDER_NAMES;
 
 @Injectable()
 export class SettingsService {
@@ -29,7 +32,10 @@ export class SettingsService {
       return {
         provider,
         apiKey: s?.apiKey ? '••••••' + s.apiKey.slice(-4) : '',
-        hasKey: !!(s?.apiKey),
+        hasKey: !!s?.apiKey,
+        // Ollama runs locally and needs no credential, so clients must not
+        // treat "no key" as "not usable".
+        requiresKey: requiresKey(provider),
         model: s?.model || DEFAULT_MODELS[provider] || '',
         enabled: s?.enabled ?? true,
       };
@@ -62,17 +68,64 @@ export class SettingsService {
   }
 
   async getApiKeys(): Promise<Record<string, string>> {
-    const settings = await this.settingRepo.find({ where: { enabled: true } });
+    const rows = await this.settingRepo.find();
+    const byProvider = Object.fromEntries(rows.map((r) => [r.provider, r]));
     const result: Record<string, string> = {};
-    for (const s of settings) {
-      if (s.provider === 'ollama') {
-        // Ollama doesn't use an API key — the value is treated as a baseURL by core.
-        result.ollama = s.apiKey || process.env.OLLAMA_URL || 'http://ollama:11434/v1';
-      } else if (s.apiKey) {
-        result[s.provider] = s.apiKey;
+
+    for (const provider of PROVIDERS) {
+      const row = byProvider[provider];
+      // A missing row means "not configured yet", which defaults to enabled.
+      if (row && !row.enabled) continue;
+
+      if (provider === 'ollama') {
+        /*
+         * Ollama takes no API key — this slot carries a base URL. It is always
+         * populated so a locally running daemon is picked up without any setup;
+         * previously it only appeared once a row had been saved.
+         */
+        result.ollama =
+          row?.apiKey || process.env.OLLAMA_URL || DEFAULT_OLLAMA_BASE_URL;
+      } else if (row?.apiKey) {
+        result[provider] = row.apiKey;
       }
     }
     return result;
+  }
+
+  /**
+   * Models a provider currently offers, asked of the provider itself when a
+   * credential is available and falling back to the bundled catalog otherwise.
+   * The response says which, so the UI never implies a stale list is live.
+   */
+  async listModels(provider: string) {
+    if (!PROVIDERS.includes(provider as ProviderName)) {
+      return { provider, models: [], source: 'catalog' as const, reason: 'Unknown provider' };
+    }
+    const name = provider as ProviderName;
+    const apiKeys = await this.getApiKeys();
+    const models = await this.getModels();
+
+    const result = await listModelsForProvider(name, {
+      apiKeys: apiKeys as never,
+      models: models as never,
+      temperature: 0.7,
+      timeoutMs: 30_000,
+      stream: false,
+    });
+
+    // Attach catalog hints/labels to live ids where we know them, so the picker
+    // still reads well when the provider only returns bare ids.
+    const known = new Map(MODEL_CATALOG[name].models.map((m) => [m.id, m]));
+    return {
+      provider,
+      source: result.source,
+      reason: result.reason,
+      models: result.models.map((m) => ({
+        id: m.id,
+        label: m.label ?? known.get(m.id)?.label,
+        hint: m.hint ?? known.get(m.id)?.hint,
+      })),
+    };
   }
 
   async getModels(): Promise<Record<string, string>> {

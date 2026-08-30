@@ -7,7 +7,9 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
 ## Features
 
 - Parallel calls to OpenAI, Anthropic, Google, Groq, DeepSeek, and Ollama (local)
-- Token usage reporting and per-model cost estimation
+- **Live model discovery** — every picker asks the provider's own API which models it currently offers, so a vendor shipping a new model needs no code change. A bundled catalog (`packages/core/src/config/catalog.ts`) is the fallback before a key is entered or when a provider is unreachable, and the UI always says which of the two you're looking at
+- **Ollama needs no API key** — it runs locally, so it is enabled by default at `http://localhost:11434/v1` and works out of the box with nothing configured
+- Token usage reporting and per-model cost estimation — a model with no known price reports `n/a`, never a misleading `$0.00`
 - Configurable per-provider model selection, temperature, and timeout
 - Streaming output (sequential, per-provider)
 - JSON output mode + file save
@@ -27,10 +29,16 @@ A production-ready CLI tool to compare responses from **OpenAI**, **Anthropic**,
   - Per-turn comparison table with fastest / cheapest / longest / highest tok/s badges
 - Bundled Docker setup for running Ollama locally
 - **Web UI + HTTP API** — NestJS backend (`packages/server`) with Postgres-backed chat history & provider settings, plus a Nuxt 3 frontend (`packages/web`) with:
-  - ChatGPT-style **collapsible sidebar** with session list, hover + active accents
+  - **Side-by-side comparison grid** — every provider's answer to one prompt sits in an equal-height card, with tokens / cost / latency aligned in a footer row you can scan across. Columns keep a fixed provider order across turns, so a provider stays in its own column even though the server replies in completion order
+  - **Responsive shell** — inline sidebar on desktop, overlay drawer with scrim on phones (Escape or tap-outside closes it); usable from 320px up
   - **Light / dark theme toggle** (persists in `localStorage`, defaults to system preference)
-  - **Settings modal** for all 6 providers — toggle, masked API-key input, and a curated **model dropdown** per provider (with "+ custom model" fallback). Keys are persisted in Postgres, not the browser
-  - Streaming SSE chat with parallel responses per provider
+  - **Providers dialog** for all 6 providers — toggle, masked API-key input with show/hide, and a curated **model dropdown** per provider (with "+ custom model" fallback). Keys are persisted in Postgres, not the browser
+  - Streaming SSE chat with parallel responses per provider, each with a live skeleton until its first token
+  - **Real empty, loading and error states** — layout-matched skeletons instead of spinners, one-click example prompts, a "no providers set up" path into the dialog, and human-readable failures with a retry
+  - **Per-provider failures explained, not dumped** — a raw `401 {"type":"error",…}` becomes "This provider rejected the API key", with the provider's own text kept behind a disclosure and anything key-shaped redacted. A provider that drops out mid-stream flips to a failed card immediately rather than sitting on "Thinking…"
+  - **Undo on delete** instead of a confirmation dialog
+  - **Accessible by default** — visible focus rings, keyboard-navigable dialog with a focus trap, labelled controls, `prefers-reduced-motion` honoured, no meaning carried by colour alone
+- **MCP server** (`modelclash-mcp`) exposing `compare_models`, `list_providers`, and `estimate_cost` to any MCP client (Claude Code, Claude Desktop, …)
 - One-command full stack via `docker compose up -d` (Postgres + NestJS + Nuxt + Ollama)
 - TypeScript strict mode, Vitest unit tests, npm workspaces monorepo
 
@@ -79,21 +87,24 @@ ANTHROPIC_API_KEY=sk-ant-...
 GOOGLE_API_KEY=AIza...
 GROQ_API_KEY=gsk_...
 DEEPSEEK_API_KEY=sk-...
-OLLAMA_BASE_URL=http://localhost:11434/v1
+# Ollama needs no API key and is on by default at the URL below —
+# only set this if your daemon runs somewhere else.
+# OLLAMA_BASE_URL=http://localhost:11434/v1
 
 # Optional model overrides
-DEFAULT_OPENAI_MODEL=gpt-4o
-DEFAULT_ANTHROPIC_MODEL=claude-sonnet-4
-DEFAULT_GOOGLE_MODEL=gemini-2.5-pro
+DEFAULT_OPENAI_MODEL=gpt-5.6-terra
+DEFAULT_ANTHROPIC_MODEL=claude-opus-5
+DEFAULT_GOOGLE_MODEL=gemini-3.7-flash
 DEFAULT_GROQ_MODEL=llama-3.3-70b-versatile
-DEFAULT_DEEPSEEK_MODEL=deepseek-chat
+DEFAULT_DEEPSEEK_MODEL=deepseek-v4-flash
 DEFAULT_OLLAMA_MODEL=llama3.2
 
 # Optional request timeout
 REQUEST_TIMEOUT_MS=60000
 
 # ── NestJS server (packages/server) ─────────────────────────
-DATABASE_URL=postgresql://modelclash:modelclash@localhost:5432/modelclash
+# 5433 is the host port docker-compose publishes (container 5432)
+DATABASE_URL=postgresql://modelclash:modelclash@localhost:5433/modelclash
 PORT=3001
 FRONTEND_URL=http://localhost:3000
 
@@ -117,7 +128,7 @@ You can run modelclash without spending money using any of these:
 | ------------ | ---------------------------------------------------------------------------------- | ---------------------------------------- |
 | **Groq**     | Generous free rate limits, very fast Llama 3.3 70B                                 | https://console.groq.com/keys            |
 | **Google**   | Free Gemini tier (15 RPM)                                                          | https://aistudio.google.com/apikey       |
-| **DeepSeek** | Free starter credits, strong reasoning (`deepseek-chat`, `deepseek-reasoner`)      | https://platform.deepseek.com            |
+| **DeepSeek** | Free starter credits, strong reasoning (`deepseek-v4-flash`, `deepseek-v4-pro`)      | https://platform.deepseek.com            |
 | **Ollama**   | 100 % local — no key, no network. Install Ollama, `ollama pull llama3.2`           | https://ollama.com                       |
 
 ### Persistent config (`~/.modelclash/config.json`)
@@ -169,7 +180,7 @@ Ports exposed on the host:
 1. Open <http://localhost:3000>.
 2. Click the **gear icon** at the bottom of the sidebar → *Settings*.
 3. For each cloud provider (OpenAI, Anthropic, Google, Groq, DeepSeek): flip the toggle on, paste an API key, and pick a model from the dropdown.
-4. For **Ollama**: just flip the toggle on — the server auto-uses `http://ollama:11434/v1` inside the docker network (override with the `OLLAMA_URL` env var on the `server` service). Pick a model that's actually pulled (default compose pulls `llama3.2`).
+4. For **Ollama**: nothing to do — it needs no API key and is on by default. Inside the docker network the server reaches it at `http://ollama:11434/v1` (set by `OLLAMA_URL` on the `server` service in `docker-compose.yml`); running natively it defaults to `http://localhost:11434/v1`. The model dropdown lists whatever you have actually pulled (default compose pulls `llama3.2`).
 5. Hit **Save Settings**. Subsequent chat requests use whatever's saved in Postgres — no rebuild needed.
 
 The sidebar's bottom area also has a **light/dark toggle** (sun/moon icon).
@@ -217,14 +228,17 @@ All commands run from the repo root.
 | What you want to do                      | Command                              |
 | ---------------------------------------- | ------------------------------------ |
 | Install deps                             | `npm install`                        |
-| Build all packages (core + CLI)          | `npm run build`                      |
+| Build all packages (core + CLI + MCP)    | `npm run build`                      |
 | Build server (core + NestJS)             | `npm run build:server`               |
 | Build web (Nuxt)                         | `npm run build:web`                  |
+| Build MCP server (core + MCP)            | `npm run build:mcp`                  |
 | Run the built CLI                        | `npm run cli -- <args>`              |
 | Run the CLI from TS source (no build)    | `npm run cli:dev -- <args>`          |
 | Run NestJS server in watch mode          | `npm run dev:server`                 |
 | Run Nuxt frontend in dev mode            | `npm run dev:web`                    |
 | Start built NestJS server                | `npm run start:server`               |
+| Start MCP server on stdio                | `npm run start:mcp`                  |
+| Run MCP server from TS source            | `npm run dev:mcp`                    |
 | Run tests once                           | `npm test`                           |
 | Run tests in watch mode                  | `npm run test:watch`                 |
 | Typecheck the whole monorepo             | `npm run typecheck`                  |
@@ -240,6 +254,13 @@ npm run cli -- --help
 npm run cli:dev -- chat
 npm run cli -- "Write a haiku about Mondays" --temperature 0.9
 ```
+
+### Toolchain notes
+
+Two constraints in the web build are load-bearing and easy to undo by accident:
+
+- **`vite` is pinned at the repo root (`^7.3.3`).** Nuxt's builder needs the same Vite *instance* as `@vitejs/plugin-vue`. Without the root pin, Vitest hoists Vite 5 to the root, the plugin binds to that copy, and `nuxt dev` fails with `No entry found in rollupOptions.input`. Vitest keeps its own nested Vite 5 — that is expected.
+- **`packages/web` does not set `ssr: false`.** It hits the same builder bug in Nuxt 3.21. All data is fetched client-side anyway, so rendering the static shell on the server costs nothing and improves first paint.
 
 ### Install globally (optional)
 
@@ -260,11 +281,11 @@ modelclash "<prompt>" [options]
 
 | Flag                        | Description                                                                                                | Default                  |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `--model-openai <model>`    | OpenAI model                                                                                               | `gpt-4o`                 |
-| `--model-anthropic <model>` | Anthropic model                                                                                            | `claude-sonnet-4`        |
-| `--model-google <model>`    | Google model                                                                                               | `gemini-2.5-pro`         |
+| `--model-openai <model>`    | OpenAI model                                                                                               | `gpt-5.6-terra`          |
+| `--model-anthropic <model>` | Anthropic model                                                                                            | `claude-opus-5`          |
+| `--model-google <model>`    | Google model                                                                                               | `gemini-3.7-flash`       |
 | `--model-groq <model>`      | Groq model                                                                                                 | `llama-3.3-70b-versatile`|
-| `--model-deepseek <model>`  | DeepSeek model                                                                                             | `deepseek-chat`          |
+| `--model-deepseek <model>`  | DeepSeek model                                                                                             | `deepseek-v4-flash`      |
 | `--model-ollama <model>`    | Ollama model                                                                                               | `llama3.2`               |
 | `-p, --providers <list>`    | Providers to use (comma-separated, e.g. `openai,groq`). If omitted in a TTY, an interactive picker appears. | all with keys            |
 | `-t, --temperature <num>`   | Sampling temperature                                                                                       | `0.7`                    |
@@ -282,7 +303,7 @@ npm run cli -- "Explain quantum entanglement in one sentence."
 # Pin providers and override a model
 npm run cli -- "Write a haiku about Mondays" \
   --providers openai,groq \
-  --model-openai gpt-4o-mini \
+  --model-openai gpt-5.6-luna \
   --temperature 0.9
 
 # Stream + save JSON
@@ -414,22 +435,31 @@ Monorepo using npm workspaces.
 ```
 packages/
   core/                     # @modelclash/core — providers, pricing, retry, cost, orchestrator
+    src/config/catalog.ts   #   single source of truth: models, defaults, pricing, effort support
     src/providers/          # openai, anthropic, google, groq, openai-compatible (deepseek + ollama)
+                            #   each implements listModels() against the vendor's live API
   cli/                      # modelclash — CLI entrypoint, chat REPL, config command
+  mcp/                      # @modelclash/mcp — MCP stdio server (compare_models, list_providers, estimate_cost)
   server/                   # @modelclash/server — NestJS HTTP API (chat, settings, llm), Postgres via TypeORM
     src/chat/               #   sessions, messages, SSE streaming
     src/settings/           #   provider_settings (API keys + model + enabled) in Postgres
     src/llm/                #   bridges core providers using settings from DB
   web/                      # @modelclash/web — Nuxt 3 + Tailwind + Pinia chat UI
+    assets/css/main.css     #   design tokens, global focus ring, skeleton, reduced-motion
+    tailwind.config.ts      #   brand palette, elevation, motion + `xs` breakpoint
     components/
-      AppSidebar.vue        #   collapsible sidebar (sessions, theme, settings)
-      ChatInput.vue         #   composer with streaming-aware send button
-      MessageBubble.vue     #   user / assistant / error bubble with theme-aware colors
-      ModelSelect.vue       #   styled per-provider model dropdown
-      SettingsModal.vue     #   API keys + model picker (writes to DB via /api/settings)
-      StreamingBubble.vue   #   per-provider live streaming bubble
+      AppSidebar.vue        #   sessions, provider status, theme toggle
+      ChatInput.vue         #   composer; blocked with a reason when no provider is set up
+      MessageBubble.vue     #   user turn, or one model's response card (metrics footer + copy)
+      ModelSelect.vue       #   combobox model picker, arrow-key navigable
+      ProviderBadge.vue     #   the coloured provider initial, shared by every view
+      SettingsModal.vue     #   focus-trapped providers dialog (writes to DB via /api/settings)
+      StreamingBubble.vue   #   per-provider live response, skeleton until the first token
     composables/
-      useApi.ts             #   fetch wrapper + SSE parser
+      useApi.ts             #   fetch wrapper + SSE parser; failures become human sentences
+      useFormat.ts          #   token / cost / duration / relative-time formatting
+      useProviderError.ts   #   raw provider failure → readable sentence + redacted detail
+      useProviderMeta.ts    #   single source of truth for provider labels + colours
       useTheme.ts           #   light / dark / system, persisted in localStorage
 .github/
   workflows/
@@ -438,6 +468,78 @@ docker-compose.yml          # Full stack: postgres (host 5433) + server + web + 
 Dockerfile.ollama           # single image with models baked in
 .env.example                # template for environment configuration
 ```
+
+## MCP server
+
+`@modelclash/mcp` exposes modelclash over the [Model Context Protocol](https://modelcontextprotocol.io), so any MCP client can fan a prompt out across providers and get usage + cost back.
+
+### Tools
+
+| Tool | Arguments | Returns |
+| --- | --- | --- |
+| `compare_models` | `prompt` (required), `providers[]`, `history[]`, `temperature`, `timeoutMs` | Each provider's answer plus tokens, estimated cost, and latency |
+| `list_providers` | — | All six providers, whether each has credentials, and the model that would be used |
+| `estimate_cost` | `model`, `inputTokens`, `outputTokens` | USD estimate from the built-in pricing table |
+
+Every tool also returns `structuredContent`, so clients that support structured tool output get typed results instead of parsing the text.
+
+### Configuration
+
+The server reads the **same** credentials as the CLI — environment variables first, then `~/.modelclash/config.json` (see [Configuration](#configuration)). Config is re-read on every call, so `modelclash config set …` takes effect without restarting the server. `compare_models` queries every configured provider unless you pass `providers`.
+
+### Run it
+
+```bash
+npm run build:mcp     # build @modelclash/core + @modelclash/mcp
+npm run start:mcp     # serve on stdio
+npm run dev:mcp       # run from TypeScript source, no build step
+```
+
+### Register with a client
+
+Claude Code:
+
+```bash
+claude mcp add modelclash -- node /absolute/path/to/cli-firebox/packages/mcp/dist/index.js
+```
+
+Claude Desktop — add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "modelclash": {
+      "command": "node",
+      "args": ["/absolute/path/to/cli-firebox/packages/mcp/dist/index.js"],
+      "env": {
+        "OPENAI_API_KEY": "sk-...",
+        "ANTHROPIC_API_KEY": "sk-ant-..."
+      }
+    }
+  }
+}
+```
+
+Use absolute paths — clients do not launch the server from this repo's directory. The transport is stdio, so the server writes **only** protocol messages to stdout; diagnostics go to stderr.
+
+## Keeping models up to date
+
+Model lists are **not** maintained by hand. Each provider in `@modelclash/core` implements `listModels()` against the vendor's own API:
+
+| Provider | Endpoint used |
+| --- | --- |
+| OpenAI | `client.models.list()`, filtered to chat-capable ids |
+| Anthropic | `GET /v1/models` (REST — the pinned SDK 0.30 predates the Models API) |
+| Google | `GET /v1beta/models`, filtered to `generateContent` support |
+| Groq / DeepSeek / Ollama | `client.models.list()` (OpenAI-compatible) |
+
+The web UI calls `GET /api/settings/models/:provider`, which returns `{ models, source, reason }` — `source` is `"live"` when it came from the provider just now and `"catalog"` when it fell back, with `reason` explaining why. The picker labels each list accordingly, so a stale fallback never masquerades as current.
+
+`packages/core/src/config/catalog.ts` is the fallback and the **only** place that carries pricing (no vendor exposes prices over an API). Update it when prices change or when you want a better offline default; everything else — CLI picker, server defaults, web dialog, cost estimation — derives from it.
+
+### Environment variables and `.env`
+
+Live discovery uses the same credentials as the comparison calls; nothing extra is needed.
 
 ## Continuous Integration
 

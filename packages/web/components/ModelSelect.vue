@@ -1,17 +1,29 @@
 <template>
   <div ref="rootEl" class="relative">
     <button
+      :id="buttonId"
+      ref="buttonEl"
       type="button"
-      @click="open = !open"
-      class="w-full flex items-center justify-between gap-2 bg-slate-200 dark:bg-slate-700 hover:bg-slate-650 border border-slate-300 dark:border-slate-600
-        rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white text-left transition-colors focus:outline-none focus:ring-2
-        focus:ring-violet-500 focus:border-transparent"
+      class="w-full flex items-center justify-between gap-2 field text-left"
+      role="combobox"
+      :aria-expanded="open"
+      :aria-controls="listId"
+      aria-haspopup="listbox"
+      :aria-labelledby="labelledBy ? `${labelledBy} ${buttonId}` : undefined"
+      @click="toggle"
+      @keydown.down.prevent="openAndFocus(0)"
+      @keydown.up.prevent="openAndFocus(options.length - 1)"
     >
-      <span class="truncate">{{ modelValue || placeholder }}</span>
+      <span class="truncate" :class="{ 'text-slate-400 dark:text-slate-500': !modelValue }">
+        {{ modelValue || placeholder }}
+      </span>
       <svg
-        class="w-4 h-4 text-slate-500 dark:text-slate-400 flex-shrink-0 transition-transform"
+        class="w-4 h-4 text-slate-400 shrink-0 transition-transform duration-150"
         :class="{ 'rotate-180': open }"
-        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+        aria-hidden="true"
       >
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
       </svg>
@@ -20,39 +32,61 @@
     <Transition name="dropdown">
       <div
         v-if="open"
-        class="absolute z-20 mt-1.5 w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl
-          overflow-hidden max-h-72 overflow-y-auto"
+        :id="listId"
+        role="listbox"
+        class="absolute z-20 w-full max-h-72 overflow-y-auto rounded-xl shadow-overlay
+          bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+        :class="dropUp ? 'bottom-full mb-1.5' : 'top-full mt-1.5'"
+        @keydown.esc.prevent="close(true)"
+        @keydown.down.prevent="move(1)"
+        @keydown.up.prevent="move(-1)"
       >
-        <div v-if="options.length === 0" class="px-3 py-3 text-xs text-slate-500">
-          No suggested models for this provider.
-        </div>
+        <p v-if="options.length === 0" class="px-3 py-3 text-xs text-slate-500 dark:text-slate-400">
+          No suggested models for this provider — use a custom name below.
+        </p>
+
         <button
-          v-for="opt in options"
+          v-for="(opt, i) in options"
           :key="opt.value"
+          :ref="(el) => (optionEls[i] = el as HTMLElement)"
           type="button"
+          role="option"
+          :aria-selected="modelValue === opt.value"
+          class="w-full flex items-center justify-between gap-2 px-3 py-2.5 text-sm text-left transition-colors
+            hover:bg-slate-100 dark:hover:bg-slate-700/70"
+          :class="
+            modelValue === opt.value
+              ? 'bg-brand-50 dark:bg-brand-500/15 text-slate-900 dark:text-white'
+              : 'text-slate-700 dark:text-slate-300'
+          "
           @click="select(opt.value)"
-          class="w-full flex items-center justify-between px-3 py-2.5 text-sm text-left
-            hover:bg-slate-200 dark:hover:bg-slate-700/70 transition-colors"
-          :class="modelValue === opt.value ? 'bg-violet-600/15 text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-300'"
         >
-          <div class="min-w-0">
-            <p class="font-medium truncate">{{ opt.label }}</p>
-            <p v-if="opt.hint" class="text-xs text-slate-500 mt-0.5 truncate">{{ opt.hint }}</p>
-          </div>
+          <span class="min-w-0">
+            <span class="block font-medium truncate">{{ opt.label }}</span>
+            <span v-if="opt.hint" class="block text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+              {{ opt.hint }}
+            </span>
+          </span>
           <svg
             v-if="modelValue === opt.value"
-            class="w-4 h-4 text-violet-400 flex-shrink-0 ml-2"
-            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+            class="w-4 h-4 text-brand-600 dark:text-brand-400 shrink-0"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
           >
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
           </svg>
         </button>
+
         <div class="border-t border-slate-200 dark:border-slate-700">
           <button
             type="button"
+            class="w-full px-3 py-2.5 text-xs text-left transition-colors
+              text-slate-500 dark:text-slate-400
+              hover:text-slate-900 dark:hover:text-white
+              hover:bg-slate-100 dark:hover:bg-slate-700/70"
             @click="enableCustom"
-            class="w-full px-3 py-2 text-xs text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-700/70
-              transition-colors text-left"
           >
             + Use a custom model name…
           </button>
@@ -60,16 +94,21 @@
       </div>
     </Transition>
 
-    <input
-      v-if="customMode"
-      v-model="customInput"
-      @blur="commitCustom"
-      @keydown.enter.prevent="commitCustom"
-      type="text"
-      placeholder="Enter custom model name"
-      class="mt-2 w-full bg-slate-200 dark:bg-slate-700 border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-white
-        placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
-    />
+    <div v-if="customMode" class="mt-2">
+      <label :for="customId" class="sr-only">Custom model name</label>
+      <input
+        :id="customId"
+        ref="customEl"
+        v-model="customInput"
+        type="text"
+        placeholder="e.g. gpt-4o-2024-11-20"
+        spellcheck="false"
+        class="field"
+        @blur="commitCustom"
+        @keydown.enter.prevent="commitCustom"
+        @keydown.esc.prevent="customMode = false"
+      />
+    </div>
   </div>
 </template>
 
@@ -80,29 +119,79 @@ const props = defineProps<{
   modelValue: string
   options: Option[]
   placeholder?: string
+  /** Id of the visible <label>, so the trigger announces what it selects. */
+  labelledBy?: string
 }>()
 
 const emit = defineEmits<{ 'update:modelValue': [v: string] }>()
+
+const buttonId = useId()
+const listId = useId()
+const customId = useId()
 
 const open = ref(false)
 const customMode = ref(false)
 const customInput = ref('')
 const rootEl = ref<HTMLElement>()
+const buttonEl = ref<HTMLElement>()
+const customEl = ref<HTMLInputElement>()
+const optionEls = ref<HTMLElement[]>([])
+
+const dropUp = ref(false)
+
+/**
+ * Opens upward when the menu would not fit below. The dialog body scrolls, so a
+ * menu on the last provider would otherwise be clipped by its container.
+ */
+function updateDropDirection() {
+  const rect = buttonEl.value?.getBoundingClientRect()
+  if (!rect) return
+  const MENU_MAX_HEIGHT = 288 // matches max-h-72
+  const below = window.innerHeight - rect.bottom
+  dropUp.value = below < MENU_MAX_HEIGHT && rect.top > below
+}
+
+function toggle() {
+  if (open.value) {
+    close()
+    return
+  }
+  updateDropDirection()
+  open.value = true
+}
+
+/** `restoreFocus` sends focus back to the trigger — required after Escape. */
+function close(restoreFocus = false) {
+  open.value = false
+  if (restoreFocus) buttonEl.value?.focus()
+}
+
+async function openAndFocus(index: number) {
+  updateDropDirection()
+  open.value = true
+  await nextTick()
+  optionEls.value[index]?.focus()
+}
+
+function move(delta: number) {
+  const items = optionEls.value.filter(Boolean)
+  const current = items.indexOf(document.activeElement as HTMLElement)
+  const next = (current + delta + items.length) % items.length
+  items[next]?.focus()
+}
 
 function select(v: string) {
   emit('update:modelValue', v)
-  open.value = false
   customMode.value = false
+  close(true)
 }
 
-function enableCustom() {
+async function enableCustom() {
   customInput.value = props.modelValue
   customMode.value = true
   open.value = false
-  nextTick(() => {
-    const el = rootEl.value?.querySelector('input') as HTMLInputElement | null
-    el?.focus()
-  })
+  await nextTick()
+  customEl.value?.focus()
 }
 
 function commitCustom() {
@@ -111,14 +200,26 @@ function commitCustom() {
   customMode.value = false
 }
 
-function onDocClick(e: MouseEvent) {
+function onDocPointerDown(e: PointerEvent) {
   if (!rootEl.value?.contains(e.target as Node)) open.value = false
 }
-onMounted(() => document.addEventListener('click', onDocClick))
-onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
+
+// `pointerdown` rather than `click` so the menu closes before a click lands on
+// whatever is underneath it.
+onMounted(() => document.addEventListener('pointerdown', onDocPointerDown))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocPointerDown))
 </script>
 
 <style scoped>
-.dropdown-enter-active, .dropdown-leave-active { transition: opacity 0.12s ease, transform 0.12s ease; }
-.dropdown-enter-from, .dropdown-leave-to { opacity: 0; transform: translateY(-4px); }
+.dropdown-enter-active,
+.dropdown-leave-active {
+  transition:
+    opacity 120ms cubic-bezier(0.2, 0, 0, 1),
+    transform 120ms cubic-bezier(0.2, 0, 0, 1);
+}
+.dropdown-enter-from,
+.dropdown-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
 </style>

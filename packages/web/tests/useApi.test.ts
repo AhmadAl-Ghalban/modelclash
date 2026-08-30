@@ -26,6 +26,7 @@ function sseResponse(chunks: string[]) {
           if (queue.length === 0) return { done: true, value: undefined };
           return { done: false, value: encoder.encode(queue.shift()!) };
         },
+        releaseLock: () => {},
       }),
     },
   } as unknown as Response;
@@ -43,7 +44,7 @@ describe('useApi REST helpers', () => {
     fetchMock.mockResolvedValue(jsonResponse({ hello: 'world' }));
     const api = useApi();
     const out = await api.get('/x');
-    expect(fetchMock).toHaveBeenCalledWith('http://api/x');
+    expect(fetchMock).toHaveBeenCalledWith('http://api/x', { signal: undefined });
     expect(out).toEqual({ hello: 'world' });
   });
 
@@ -58,10 +59,24 @@ describe('useApi REST helpers', () => {
     expect(init.body).toBe('{"a":1}');
   });
 
-  it('throws on non-OK responses', async () => {
+  it('turns a non-OK response into a human-readable ApiError', async () => {
     fetchMock.mockResolvedValue(jsonResponse({}, 500));
     const api = useApi();
-    await expect(api.get('/x')).rejects.toThrow(/500/);
+    await expect(api.get('/x')).rejects.toMatchObject({
+      name: 'ApiError',
+      kind: 'server',
+      status: 500,
+      message: expect.stringMatching(/try again/i),
+    });
+  });
+
+  it('reports a refused connection as a network error, not a server error', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+    const api = useApi();
+    await expect(api.get('/x')).rejects.toMatchObject({
+      kind: 'network',
+      message: expect.stringMatching(/port 3001/),
+    });
   });
 
   it('del tolerates 204 responses', async () => {
@@ -73,7 +88,7 @@ describe('useApi REST helpers', () => {
   it('del throws on other failure statuses', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 500 } as Response);
     const api = useApi();
-    await expect(api.del('/x')).rejects.toThrow(/500/);
+    await expect(api.del('/x')).rejects.toMatchObject({ kind: 'server', status: 500 });
   });
 });
 
@@ -100,10 +115,9 @@ describe('useApi.streamPost SSE parsing', () => {
     );
     const seen: any[] = [];
     await useApi().streamPost('/x', {}, (event, data) => seen.push({ event, data }));
-    // NOTE: the parser resets currentEvent at the top of each read iteration,
-    // so an event-name in one read followed by its data line in the next read
-    // falls back to the default 'message' event. This test pins that behavior.
-    expect(seen).toEqual([{ event: 'message', data: { text: 'hi' } }]);
+    // The event name is held across reads, so a frame split mid-JSON still
+    // arrives under the event that introduced it.
+    expect(seen).toEqual([{ event: 'chunk', data: { text: 'hi' } }]);
   });
 
   it('emits the default "message" event when no event: line is present', async () => {
@@ -142,6 +156,9 @@ describe('useApi.streamPost SSE parsing', () => {
 
   it('throws if the initial response is not OK', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 502 } as Response);
-    await expect(useApi().streamPost('/x', {}, () => {})).rejects.toThrow(/502/);
+    await expect(useApi().streamPost('/x', {}, () => {})).rejects.toMatchObject({
+      kind: 'server',
+      status: 502,
+    });
   });
 });

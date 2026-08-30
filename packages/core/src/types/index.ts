@@ -34,7 +34,8 @@ export interface ProviderResponse {
   model: string;
   text: string;
   usage: TokenUsage;
-  costUsd: number;
+  /** Null when the model has no known price — never silently zero. */
+  costUsd: number | null;
   durationMs: number;
 }
 
@@ -61,6 +62,13 @@ export interface CliOptions {
   json: boolean;
   save?: string;
   timeout: number;
+}
+
+/** A model offered by a provider, as reported live or from the offline catalog. */
+export interface ModelInfo {
+  id: string
+  label?: string
+  hint?: string
 }
 
 export interface ModelPricing {

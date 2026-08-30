@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import type { LLMProvider } from "../interfaces/provider.js";
 import type {
+  ModelInfo,
   ProviderRequest,
   ProviderResponse,
 } from "../types/index.js";
@@ -10,9 +11,37 @@ import { retryWithBackoff, withTimeout } from "../utils/retry.js";
 export class GoogleProvider implements LLMProvider {
   readonly name = "google" as const;
   private client: GoogleGenAI;
+  private apiKey: string;
 
   constructor(apiKey: string) {
+    this.apiKey = apiKey;
     this.client = new GoogleGenAI({ apiKey });
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    // Called over REST rather than through the SDK: the listing shape has moved
+    // between @google/genai versions, and this endpoint is stable.
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(this.apiKey)}`,
+    );
+    if (!res.ok) throw new Error(`Google models request failed (${res.status})`);
+    const body = (await res.json()) as {
+      models?: {
+        name: string;
+        displayName?: string;
+        supportedGenerationMethods?: string[];
+      }[];
+    };
+    return (body.models ?? [])
+      // Only models that can answer a prompt; the list also carries embedding
+      // and token-counting models.
+      .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+      .map((m) => ({
+        // Names come back prefixed, e.g. "models/gemini-3.7-flash".
+        id: m.name.replace(/^models\//, ""),
+        label: m.displayName,
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async generate(req: ProviderRequest): Promise<ProviderResponse> {
